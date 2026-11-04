@@ -16,11 +16,76 @@ function createChatGPT2APIDashboard(React, STYLES) {
   function shortError(e){return String(e?.message||e||'请求失败').slice(0,260)}
   function HeaderIcon(){return h('span',{style:{display:'inline-flex',alignItems:'center',justifyContent:'center',width:'20px',height:'20px',fontSize:'18px'}},'◉')}
   function Chip({kind='neutral',children}){return h('span',{className:'c2a-chip '+kind},children)}
-  function Btn({children,onClick,primary=false,disabled=false,danger=false}){return h('button',{type:'button',className:'c2a-button'+(primary?' primary':'')+(danger?' danger':''),onClick,disabled},children)}
+  function Btn({children,onClick,primary=false,disabled=false,danger=false,cls='',className='',style,title}){
+    const c='c2a-button'+(primary?' primary':'')+(danger?' danger':'')+((cls||className)?' '+(cls||className):'');
+    return h('button',{type:'button',className:c,onClick,disabled,style,title},children);
+  }
   function Card({title,children,cls=''}){return h('section',{className:'c2a-card '+cls},h('h3',null,title),children)}
   function number(v){const n=Number(v);return Number.isFinite(n)?n.toLocaleString('zh-CN'):'—'}
   function maskToken(v){if(typeof v!=='string'||!v)return '—';return v.slice(0,5)+'••••'+v.slice(-4)}
   function accountToken(a){return String(a?.ref||'')}
+  function copyToClipboard(text, onSuccess){
+    if(!text)return;
+    function fallback(){
+      try{
+        if(typeof document==='undefined')return;
+        const ta=document.createElement('textarea');
+        ta.value=text;
+        ta.setAttribute('readonly','');
+        ta.style.position='fixed';
+        ta.style.top='-9999px';
+        ta.style.left='-9999px';
+        ta.style.opacity='0';
+        document.body.appendChild(ta);
+        ta.select();
+        ta.setSelectionRange(0,99999);
+        const ok=document.execCommand('copy');
+        document.body.removeChild(ta);
+        if(ok&&typeof onSuccess==='function')onSuccess();
+      }catch(e){console.warn('复制降级失败',e)}
+    }
+    try{
+      if(globalThis.navigator?.clipboard?.writeText){
+        globalThis.navigator.clipboard.writeText(text).then(()=>{
+          if(typeof onSuccess==='function')onSuccess();
+        }).catch(()=>fallback());
+        return;
+      }
+    }catch{}
+    fallback();
+  }
+  const LOCAL_USER_KEYS_KEY='c2a_saved_user_keys_v1';
+  function getLocalUserKeys(){
+    try{
+      const raw=globalThis.localStorage?.getItem(LOCAL_USER_KEYS_KEY);
+      return raw?JSON.parse(raw):{};
+    }catch{return {}}
+  }
+  function saveLocalUserKey(id,key,name){
+    if(!id||!key)return;
+    try{
+      const cur=getLocalUserKeys();
+      cur[String(id)]={key:String(key),name:String(name||''),time:Date.now()};
+      globalThis.localStorage?.setItem(LOCAL_USER_KEYS_KEY,JSON.stringify(cur));
+    }catch{}
+  }
+  function removeLocalUserKey(id){
+    if(!id)return;
+    try{
+      const cur=getLocalUserKeys();
+      delete cur[String(id)];
+      globalThis.localStorage?.setItem(LOCAL_USER_KEYS_KEY,JSON.stringify(cur));
+    }catch{}
+  }
+  function formatKeyDate(str){
+    if(!str)return '—';
+    try{
+      const d=new Date(str);
+      if(isNaN(d.getTime()))return String(str).slice(0,19).replace('T',' ');
+      const p=n=>String(n).padStart(2,'0');
+      return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+    }catch{return String(str).slice(0,19)}
+  }
   function parseJsonResponse(resp,txt){
     let obj;try{obj=JSON.parse(txt)}catch{throw Error(`HTTP ${resp.status}: 返回内容不是 JSON`)}
     if(!resp.ok){const err=obj?.detail?.error||obj?.detail?.message||obj?.detail||obj?.error?.message||obj?.error||('HTTP '+resp.status);throw Error(typeof err==='string'?err:JSON.stringify(err))}
@@ -48,6 +113,8 @@ function createChatGPT2APIDashboard(React, STYLES) {
     const [userKeyPlain,setUserKeyPlain]=useState('');
     const [userKeyBusy,setUserKeyBusy]=useState(false);
     const [userKeyError,setUserKeyError]=useState('');
+    const [copiedId,setCopiedId]=useState(null);
+    const [revealedKeys,setRevealedKeys]=useState({});
     const [importJson,setImportJson]=useState('');
     const [importMessage,setImportMessage]=useState('');
     const [cpaDraft,setCpaDraft]=useState({name:'',base_url:'',secret_key:''});
@@ -100,22 +167,57 @@ function createChatGPT2APIDashboard(React, STYLES) {
       if(tab==='api')void loadUserKeys();
       if(tab==='advanced')void refreshPools();
     },[tab]);
+    function copyWithFeedback(text, id){
+      copyToClipboard(text, ()=>{
+        setCopiedId(id);
+        setTimeout(()=>setCopiedId(cur=>cur===id?null:cur), 2000);
+      });
+    }
+    function toggleReveal(id){
+      setRevealedKeys(prev=>({...prev,[id]:!prev[id]}));
+    }
+    function mergeUserKeysWithLocal(items){
+      const local=getLocalUserKeys();
+      const list=Array.isArray(items)?items:[];
+      return list.map(item=>{
+        const id=String(item.id||'');
+        const k=String(item.key||local[id]?.key||'');
+        if(item.key&&!local[id]?.key)saveLocalUserKey(id,item.key,item.name);
+        return {...item,key:k};
+      });
+    }
     async function loadUserKeys(){
       setUserKeyBusy(true);setUserKeyError('');
-      try{const json=await upstream('/api/auth/users',{timeoutMs:15000});setUserKeys(Array.isArray(json?.items)?json.items:[])}
-      catch(e){setUserKeyError(shortError(e))}finally{setUserKeyBusy(false)}
+      try{
+        const json=await upstream('/api/auth/users',{timeoutMs:15000});
+        setUserKeys(mergeUserKeysWithLocal(json?.items));
+      }catch(e){setUserKeyError(shortError(e))}finally{setUserKeyBusy(false)}
     }
     async function createUserKey(){
+      const name=userKeyName.trim()||'本机应用';
       setUserKeyBusy(true);setUserKeyError('');setUserKeyPlain('');
-      try{const json=await upstream('/api/auth/users',{method:'POST',body:{name:userKeyName.trim()||'本机应用'},timeoutMs:15000});
-        setUserKeyPlain(String(json.key||''));setUserKeys(Array.isArray(json.items)?json.items:[]);
+      try{
+        const json=await upstream('/api/auth/users',{method:'POST',body:{name},timeoutMs:15000});
+        const rawKey=String(json.key||'');
+        setUserKeyPlain(rawKey);
+        const rawItems=Array.isArray(json.items)?json.items:[];
+        const newId=String(json.id||json.item?.id||rawItems.find(x=>x.key===rawKey||x.name===name)?.id||'');
+        if(newId&&rawKey){
+          saveLocalUserKey(newId,rawKey,name);
+        }
+        setUserKeys(mergeUserKeysWithLocal(rawItems));
       }catch(e){setUserKeyError(shortError(e))}finally{setUserKeyBusy(false)}
     }
     async function revokeUserKey(id){
       if(!globalThis.confirm?.('确认吊销这个 API Key？使用它的第三方软件会立即无法调用。'))return;
       setUserKeyBusy(true);setUserKeyError('');
-      try{const json=await upstream('/api/auth/users/'+encodeURIComponent(String(id)),{method:'DELETE',timeoutMs:15000});setUserKeys(Array.isArray(json.items)?json.items:[])}
-      catch(e){setUserKeyError(shortError(e))}finally{setUserKeyBusy(false)}
+      try{
+        const json=await upstream('/api/auth/users/'+encodeURIComponent(String(id)),{method:'DELETE',timeoutMs:15000});
+        removeLocalUserKey(id);
+        const merged=mergeUserKeysWithLocal(json?.items);
+        setUserKeys(merged);
+        if(userKeyPlain&&!merged.some(x=>x.key===userKeyPlain))setUserKeyPlain('');
+      }catch(e){setUserKeyError(shortError(e))}finally{setUserKeyBusy(false)}
     }
     async function importAccountsJson(){
       let body;try{
@@ -353,7 +455,13 @@ function createChatGPT2APIDashboard(React, STYLES) {
           h(Card,{title:'第三方软件连接参数'},
             h('p',{className:'c2a-help'},'推荐只连接本机软件。远程机器需要自行配置认证、HTTPS 反向代理和访问限制。'),
             h('label',{className:'c2a-fieldlabel'},'OpenAI 兼容 API Base URL'),
-            h('pre',{className:'c2a-code'},endpoint?endpoint+'/v1':'http://127.0.0.1:38650/v1'),
+            h('div',{style:{display:'flex',gap:'8px',alignItems:'center'}},
+              h('pre',{className:'c2a-code',style:{flex:1,margin:0}},endpoint?endpoint+'/v1':'http://127.0.0.1:38650/v1'),
+              h(Btn,{
+                cls:copiedId==='base-url'?'copied':'',
+                onClick:()=>copyWithFeedback(endpoint?endpoint+'/v1':'http://127.0.0.1:38650/v1','base-url')
+              },copiedId==='base-url'?'✓ 已复制':'复制 URL')
+            ),
             h('label',{className:'c2a-fieldlabel'},'认证方式'),
             h('pre',{className:'c2a-code'},'Authorization: Bearer <你创建的用户 API Key>'),
             h('label',{className:'c2a-fieldlabel'},'可用接口'),
@@ -367,13 +475,69 @@ function createChatGPT2APIDashboard(React, STYLES) {
               h(Btn,{onClick:loadUserKeys,disabled:userKeyBusy},'刷新密钥列表')
             ),
             userKeyError?h('div',{className:'c2a-alert'},userKeyError):null,
-            userKeyPlain?h('div',{className:'c2a-info'},h('strong',null,'仅显示一次，请立即复制并妥善保存：'),
-              h('pre',{className:'c2a-code'},userKeyPlain),h(Btn,{onClick:()=>navigator.clipboard?.writeText(userKeyPlain)},'复制密钥'),h(Btn,{onClick:()=>setUserKeyPlain('')},'已保存，隐藏')):null,
-            userKeys.length?h('div',{className:'c2a-tablewrap'},h('table',{className:'c2a-table'},h('thead',null,h('tr',null,...['名称','状态','操作'].map(x=>h('th',{key:x},x)))),h('tbody',null,...userKeys.map((x,i)=>h('tr',{key:x?.id||i},
-              h('td',null,String(x?.name||'用户密钥')),
-              h('td',null,h(Chip,{kind:x?.enabled===false?'warning':'success'},x?.enabled===false?'已禁用':'可用')),
-              h('td',null,h(Btn,{danger:true,disabled:userKeyBusy,onClick:()=>revokeUserKey(x?.id)},'吊销'))
-            ))))):h('p',{className:'c2a-help'},'尚未创建第三方 API Key。管理页面本身不需要密钥。')
+            userKeyPlain?h('div',{className:'c2a-newkey-card'},
+              h('div',{className:'c2a-newkey-title'},
+                h('span',{style:{fontSize:'16px'}},'🔑'),
+                h('span',null,'新 API Key 生成成功！')
+              ),
+              h('p',{style:{margin:'0 0 6px 0',fontSize:'12px',color:'#3b5883'}},'已自动同步保存在本机密钥库，并在下方表格常驻展示。您可点击直接复制或全选文本：'),
+              h('input',{
+                type:'text',
+                readOnly:true,
+                value:userKeyPlain,
+                className:'c2a-newkey-input',
+                onClick:e=>e.target.select(),
+                title:'点击可全选密钥'
+              }),
+              h('div',{className:'c2a-newkey-actions'},
+                h(Btn,{
+                  primary:copiedId!=='new-key',
+                  cls:copiedId==='new-key'?'copied':'',
+                  onClick:()=>copyWithFeedback(userKeyPlain,'new-key')
+                },copiedId==='new-key'?'✓ 已复制到剪贴板':'复制完整密钥'),
+                h(Btn,{
+                  cls:copiedId==='new-key-bearer'?'copied':'',
+                  onClick:()=>copyWithFeedback(`Bearer ${userKeyPlain}`,'new-key-bearer')
+                },copiedId==='new-key-bearer'?'✓ 已复制 Bearer':'复制 Bearer 标头'),
+                h(Btn,{onClick:()=>setUserKeyPlain('')},'关闭提示')
+              )
+            ):null,
+            userKeys.length?h('div',{className:'c2a-tablewrap'},h('table',{className:'c2a-table'},
+              h('thead',null,h('tr',null,...['名称','API Key (密钥)','创建时间','状态','操作'].map(x=>h('th',{key:x},x)))),
+              h('tbody',null,...userKeys.map((x,i)=>{
+                const id=String(x?.id||i);
+                const keyStr=String(x?.key||'');
+                const hasKey=Boolean(keyStr);
+                const isRevealed=Boolean(revealedKeys[id]);
+                const display=hasKey?(isRevealed?keyStr:(keyStr.length>12?keyStr.slice(0,6)+'••••••••'+keyStr.slice(-4):'••••••••')):'sk-••••••••（未缓存）';
+                const isCopied=copiedId===id;
+                return h('tr',{key:id},
+                  h('td',null,
+                    h('strong',null,String(x?.name||'用户密钥')),
+                    x?.id?h('small',null,'ID: '+x.id):null
+                  ),
+                  h('td',null,
+                    h('div',{className:'c2a-key-cell'},
+                      h('code',{className:'c2a-key-code',title:hasKey?(isRevealed?'点击隐藏':'点击显示完整密钥'):'仅创建时可获取完整明文'},display),
+                      hasKey?h(Btn,{
+                        onClick:()=>toggleReveal(id)
+                      },isRevealed?'隐藏':'显示'):null,
+                      hasKey?h(Btn,{
+                        cls:isCopied?'copied':'',
+                        onClick:()=>copyWithFeedback(keyStr,id)
+                      },isCopied?'✓ 已复制':'复制'):null
+                    )
+                  ),
+                  h('td',null,h('span',{style:{fontSize:'11px',color:'var(--muted)'}},formatKeyDate(x?.created_at))),
+                  h('td',null,h(Chip,{kind:x?.enabled===false?'warning':'success'},x?.enabled===false?'已禁用':'可用')),
+                  h('td',null,
+                    h('div',{className:'c2a-rowactions'},
+                      h(Btn,{danger:true,disabled:userKeyBusy,onClick:()=>revokeUserKey(x?.id)},'吊销')
+                    )
+                  )
+                );
+              }))
+            )):h('p',{className:'c2a-help'},'尚未创建第三方 API Key。管理页面本身不需要密钥。')
           ),
           h(Card,{title:'DSH 插件内部服务'},h('pre',{className:'c2a-code'},'ctx.chatgpt2api.models()\nctx.chatgpt2api.chatCompletion({...})\nctx.chatgpt2api.createResponse({...})\nctx.chatgpt2api.generateImage({...})'),
             h('p',{className:'c2a-help'},'供其他 DSH Host 插件通过依赖注入调用；第三方客户端使用独立 API Key。'))

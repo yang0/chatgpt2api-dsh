@@ -40,7 +40,7 @@ test('native workbench has account pool, import, and standalone image tabs',()=>
   const apiNav=pool.find(n=>n?.type==='button'&&n?.props?.className?.includes('c2a-tab')&&flatten(n).includes('API 接入'));
   assert.ok(apiNav);apiNav.props.onClick();
   const apiPage=flatten(render());labels=apiPage.filter(x=>typeof x==='string').join('');
-  assert.match(labels,/通用 API 接入/);assert.match(labels,/OpenAI 兼容 API Base URL/);
+  assert.match(labels,/通用 API 接入/);assert.match(labels,/OpenAI 兼容 API Base URL/);assert.match(labels,/复制 URL/);
   const imageNav=apiPage.find(n=>n?.type==='button'&&n?.props?.className?.includes('c2a-tab')&&flatten(n).includes('图片生成'));
   assert.ok(imageNav);imageNav.props.onClick();
   const image=flatten(render());labels=image.filter(x=>typeof x==='string').join('');

@@ -10,3 +10,14 @@
 .c2a-formrow label input[type=checkbox]{min-width:0;flex:0 0 auto;height:auto}
 .c2a-workspace .c2a-formrow{margin:8px 0;align-items:stretch}
 .c2a-workspace textarea.c2a-textarea{margin-top:7px}
+/* Enhanced User API Key interactions */
+.c2a-button.copied{background:#ebfbf1;color:#168954;border-color:#92e3b2;font-weight:600}
+.c2a-button.copied:hover{background:#daf8e4;border-color:#71d999}
+.c2a-key-cell{display:inline-flex;align-items:center;gap:6px;max-width:360px}
+.c2a-key-code{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:12px;background:#eef3fa;padding:3px 7px;border-radius:6px;color:#182e54;word-break:break-all}
+.c2a-newkey-card{background:linear-gradient(135deg,#f0f7ff 0%,#e5f1ff 100%);border:1px solid #b7d6ff;border-radius:12px;padding:16px 20px;margin-top:14px;margin-bottom:14px;box-shadow:0 3px 12px rgba(45,88,209,0.06)}
+.c2a-newkey-title{display:flex;align-items:center;gap:8px;font-weight:750;color:#133c7a;font-size:14px;margin-bottom:6px}
+.c2a-newkey-input{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:13px;background:white;border:1.5px solid #8cbaff;padding:9px 12px;border-radius:8px;color:#0e2a56;width:100%;box-sizing:border-box;margin:8px 0 12px}
+.c2a-newkey-input:focus{outline:none;border-color:#3569ed;box-shadow:0 0 0 3px rgba(53,105,237,0.15)}
+.c2a-newkey-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+

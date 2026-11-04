@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createAdminHandler,createAdminRoute,ADMIN_ROUTE} from '../lib/admin-route.js';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {createAdminHandler,createAdminRoute,ADMIN_ROUTE,UserKeyStore} from '../lib/admin-route.js';
 
 const SECRET='host-private-secret-which-client-never-sees';
 const TOKEN='upstream_access_token_supersecret';
@@ -129,3 +132,65 @@ test('direct text authentication converts credentials to tokens and enrolls to u
   assert.equal(registered.accounts[0].totp_secret,'TOTPSECRET123');
   assert.doesNotMatch(JSON.stringify(data),/secret_token|rt_secret|p@ssword|TOTPSECRET/);
 });
+
+test('UserKeyStore persists keys to disk and reloads them', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c2a-test-keys-'));
+  try {
+    const store1 = new UserKeyStore({root: tmpDir});
+    store1.set('key1', 'sk-test123456');
+    assert.equal(store1.get('key1'), 'sk-test123456');
+
+    // Reload from same dir
+    const store2 = new UserKeyStore({root: tmpDir});
+    assert.equal(store2.get('key1'), 'sk-test123456');
+
+    store2.delete('key1');
+    assert.equal(store2.get('key1'), '');
+
+    const store3 = new UserKeyStore({root: tmpDir});
+    assert.equal(store3.get('key1'), '');
+  } finally {
+    fs.rmSync(tmpDir, {recursive: true, force: true});
+  }
+});
+
+test('user API key creation retains plain key and exposes it in user list', async () => {
+  let userItems = [];
+  const testFetcher = async (url, opts) => {
+    const route = new URL(url).pathname;
+    if (route === '/api/auth/users' && opts.method === 'POST') {
+      const createdItem = {id: 'usr_abc123', name: 'Test Key', enabled: true, created_at: '2026-11-04T12:00:00Z'};
+      userItems = [createdItem];
+      return {status: 200, ok: true, headers: {get: () => null}, text: async () => JSON.stringify({item: createdItem, key: 'sk-plaintext-key-xyz', items: userItems})};
+    }
+    if (route === '/api/auth/users' && opts.method === 'GET') {
+      return {status: 200, ok: true, headers: {get: () => null}, text: async () => JSON.stringify({items: userItems})};
+    }
+    if (route.startsWith('/api/auth/users/') && opts.method === 'DELETE') {
+      userItems = [];
+      return {status: 200, ok: true, headers: {get: () => null}, text: async () => JSON.stringify({items: []})};
+    }
+    throw new Error('unhandled ' + route);
+  };
+  const keyStore = new UserKeyStore();
+  const testHandler = createAdminHandler({baseUrl: 'http://127.0.0.1:38650', secret: SECRET, fetcher: testFetcher, keyStore});
+  const exec = async (payload) => {
+    const res = await testHandler.route(new Request('http://localhost/api/chatgpt2api-native/manage', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)}));
+    return res.json();
+  };
+
+  const createRes = await exec({path: '/api/auth/users', method: 'POST', body: {name: 'Test Key'}});
+  assert.equal(createRes.key, 'sk-plaintext-key-xyz');
+  assert.equal(createRes.id, 'usr_abc123');
+  assert.equal(createRes.items[0].key, 'sk-plaintext-key-xyz');
+
+  const listRes = await exec({path: '/api/auth/users', method: 'GET'});
+  assert.equal(listRes.items.length, 1);
+  assert.equal(listRes.items[0].id, 'usr_abc123');
+  assert.equal(listRes.items[0].key, 'sk-plaintext-key-xyz');
+
+  const delRes = await exec({path: '/api/auth/users/usr_abc123', method: 'DELETE'});
+  assert.equal(delRes.items.length, 0);
+  assert.equal(keyStore.get('usr_abc123'), '');
+});
+
