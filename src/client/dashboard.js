@@ -4,7 +4,8 @@
  */
 function createChatGPT2APIDashboard(React, STYLES) {
   const h=React.createElement;
-  const {useState,useEffect,useMemo}=React;
+  const {useState,useEffect,useMemo,useRef,useCallback}=React;
+  const useIsoLayoutEffect=typeof React.useLayoutEffect==='function'?React.useLayoutEffect:useEffect;
   const PANEL='chatgpt2api-dashboard';
   const DEFAULT_URL='http://127.0.0.1:38650';
   const PAGES=[['overview','总览','▣'],['accounts','号池管理','◉'],['api','API 接入','⇄'],['image','图片生成','▧'],['advanced','高级导入','⚙'],['settings','插件设置','≡']];
@@ -14,6 +15,18 @@ function createChatGPT2APIDashboard(React, STYLES) {
   }
 
   function shortError(e){return String(e?.message||e||'请求失败').slice(0,260)}
+  const DEFAULT_PROMPT='一只橘猫坐在木质窗台上晒太阳，水彩插画风格，柔和光线';
+  // Upstream refuses portrait / suggestive image prompts with a polite apology
+  // in plain text (HTTP 400, code content_policy_violation). Showing that text
+  // verbatim reads like a plugin bug, so name the cause and say what to change.
+  const POLICY_ERROR=/违反|防护限制|内容政策|安全策略|敏感|不安全|挑逗|性暗示|violat|moderation|content[_ ]policy|safety/i;
+  function imageFailureText(raw){
+    const text=String(raw||'请求失败').slice(0,300);
+    if(!POLICY_ERROR.test(text))return text;
+    return '上游以内容安全策略拒绝了本次生图，这不是号池或网络故障。\n'+
+      '请避免「写真 / 真人 / 性感 / 身体特写」等描述，改用插画、水彩、景物或虚构角色后重试。\n'+
+      '（上游原文：'+text.slice(0,180)+'）';
+  }
   function HeaderIcon(){return h('span',{style:{display:'inline-flex',alignItems:'center',justifyContent:'center',width:'20px',height:'20px',fontSize:'18px'}},'◉')}
   function Chip({kind='neutral',children}){return h('span',{className:'c2a-chip '+kind},children)}
   function Btn({children,onClick,primary=false,disabled=false,danger=false,cls='',className='',style,title}){
@@ -91,53 +104,145 @@ function createChatGPT2APIDashboard(React, STYLES) {
     if(!resp.ok){const err=obj?.detail?.error||obj?.detail?.message||obj?.detail||obj?.error?.message||obj?.error||('HTTP '+resp.status);throw Error(typeof err==='string'?err:JSON.stringify(err))}
     return obj;
   }
+  // DSH renders only the active 'main' entry: switching to another plugin
+  // panel or to another session unmounts this component, and coming back
+  // mounts a brand-new instance. Component-local state by definition starts
+  // over, which reads exactly like a full page refresh (tab resets, drafts
+  // vanish, requests restart, scroll jumps to top).
+  //
+  // The panel therefore keeps its whole view model outside the component:
+  // active tab, drafts, file selections, fetched snapshots, busy flags,
+  // long-running task results and the scroll offset per tab. Setters write
+  // through synchronously, so a request that finishes while the panel is
+  // unmounted still lands in the store instead of being dropped; mounted
+  // instances subscribe for those external updates. Secrets stay in this
+  // in-memory map only (never localStorage/sessionStorage) and disappear when
+  // the web client itself reloads.
+  const panelStore=new Map();
+  const panelWatchers=new Set();
+  const tabScroll=new Map();
+  function storeSet(key,next){
+    const prev=panelStore.get(key);
+    const value=typeof next==='function'?next(prev):next;
+    panelStore.set(key,value);
+    for(const watch of panelWatchers)watch(key);
+    return value;
+  }
+  function usePanelState(key,initial,revive){
+    const [value,setValue]=useState(()=>{
+      if(panelStore.has(key)){
+        const cached=panelStore.get(key);
+        const revived=typeof revive==='function'?revive(cached):cached;
+        // Keep store and view identical: "loading" flags frozen by an unmount
+        // must not resurrect through the subscription below.
+        if(revived!==cached)panelStore.set(key,revived);
+        return revived;
+      }
+      const fresh=typeof initial==='function'?initial():initial;
+      panelStore.set(key,fresh);
+      return fresh;
+    });
+    const mounted=useRef(true);
+    useEffect(()=>{
+      // React strict mode replays the effect: (re)mark the instance live and
+      // pick up writes that happened before the subscription was attached.
+      mounted.current=true;
+      const watch=changed=>{if(changed===key&&mounted.current)setValue(panelStore.get(key))};
+      panelWatchers.add(watch);
+      setValue(panelStore.get(key));
+      return()=>{mounted.current=false;panelWatchers.delete(watch)};
+    },[key]);
+    const set=useCallback(next=>{
+      const nextValue=storeSet(key,next);
+      if(mounted.current)setValue(nextValue);
+      return nextValue;
+    },[key]);
+    return [value,set];
+  }
   function Dashboard(){
-    const [tab,setTab]=useState('overview');
-    const [baseUrl,setBaseUrl]=useState(DEFAULT_URL);
-    const [health,setHealth]=useState({loading:true,data:null,error:''});
+    const [tab,setTab]=usePanelState('tab','overview');
+    const [baseUrl,setBaseUrl]=usePanelState('baseUrl',DEFAULT_URL);
+    const [health,setHealth]=usePanelState('health',{loading:true,data:null,error:''},x=>({...x,loading:false}));
     const [refreshTick,setRefreshTick]=useState(0);
-    const [pool,setPool]=useState({loading:false,items:[],error:'',message:''});
-    const [newToken,setNewToken]=useState('');
-    const [credentialText,setCredentialText]=useState('');
-    const [credentialItems,setCredentialItems]=useState([]);
-    const [credentialBusy,setCredentialBusy]=useState(false);
-    const [credentialFeedback,setCredentialFeedback]=useState(null);
-    const [credentialError,setCredentialError]=useState('');
-    const [doing,setDoing]=useState(false);
-    const [prompt,setPrompt]=useState('一张精致的全身人物写真，真实摄影，高质量细节。');
-    const [imageFiles,setImageFiles]=useState([]);
-    const [imageResult,setImageResult]=useState({loading:false,url:'',error:''});
+    const [pool,setPool]=usePanelState('pool',{loading:false,loaded:false,items:[],error:'',message:''},x=>({...x,loading:false}));
+    const [newToken,setNewToken]=usePanelState('newToken','');
+    const [credentialText,setCredentialText]=usePanelState('credentialText','');
+    const [credentialItems,setCredentialItems]=usePanelState('credentialItems',[]);
+    const [credentialBusy,setCredentialBusy]=usePanelState('credentialBusy',false);
+    const [credentialFeedback,setCredentialFeedback]=usePanelState('credentialFeedback',null);
+    const [credentialError,setCredentialError]=usePanelState('credentialError','');
+    const [doing,setDoing]=usePanelState('doing',false);
+    const [prompt,setPrompt]=usePanelState('prompt',DEFAULT_PROMPT);
+    const [imageFiles,setImageFiles]=usePanelState('imageFiles',[]);
+    const [imageResult,setImageResult]=usePanelState('imageResult',{loading:false,url:'',error:''});
     const [frameIndex,setFrameIndex]=useState(0);
-    const [userKeys,setUserKeys]=useState([]);
-    const [userKeyName,setUserKeyName]=useState('本机应用');
-    const [userKeyPlain,setUserKeyPlain]=useState('');
-    const [userKeyBusy,setUserKeyBusy]=useState(false);
-    const [userKeyError,setUserKeyError]=useState('');
+    const [userKeys,setUserKeys]=usePanelState('userKeys',[]);
+    const [userKeysLoaded,setUserKeysLoaded]=usePanelState('userKeysLoaded',false);
+    const [userKeyName,setUserKeyName]=usePanelState('userKeyName','本机应用');
+    const [userKeyCustom,setUserKeyCustom]=usePanelState('userKeyCustom','');
+    const [userKeyPlain,setUserKeyPlain]=usePanelState('userKeyPlain','');
+    const [userKeyBusy,setUserKeyBusy]=usePanelState('userKeyBusy',false);
+    const [userKeyError,setUserKeyError]=usePanelState('userKeyError','');
     const [copiedId,setCopiedId]=useState(null);
-    const [revealedKeys,setRevealedKeys]=useState({});
-    const [importJson,setImportJson]=useState('');
-    const [importMessage,setImportMessage]=useState('');
-    const [cpaDraft,setCpaDraft]=useState({name:'',base_url:'',secret_key:''});
-    const [cpaPools,setCpaPools]=useState([]);
-    const [cpaPool,setCpaPool]=useState('');
-    const [cpaFiles,setCpaFiles]=useState([]);
-    const [cpaSelection,setCpaSelection]=useState([]);
-    const [subDraft,setSubDraft]=useState({name:'',base_url:'',api_key:''});
-    const [subServers,setSubServers]=useState([]);
-    const [subServer,setSubServer]=useState('');
-    const [subAccounts,setSubAccounts]=useState([]);
-    const [subSelection,setSubSelection]=useState([]);
-    const [advancedBusy,setAdvancedBusy]=useState(false);
-    const [advancedError,setAdvancedError]=useState('');
+    const [revealedKeys,setRevealedKeys]=usePanelState('revealedKeys',{});
+    const [importJson,setImportJson]=usePanelState('importJson','');
+    const [importMessage,setImportMessage]=usePanelState('importMessage','');
+    const [cpaDraft,setCpaDraft]=usePanelState('cpaDraft',{name:'',base_url:'',secret_key:''});
+    const [cpaPools,setCpaPools]=usePanelState('cpaPools',[]);
+    const [cpaPool,setCpaPool]=usePanelState('cpaPool','');
+    const [cpaFiles,setCpaFiles]=usePanelState('cpaFiles',[]);
+    const [cpaSelection,setCpaSelection]=usePanelState('cpaSelection',[]);
+    const [subDraft,setSubDraft]=usePanelState('subDraft',{name:'',base_url:'',api_key:''});
+    const [subServers,setSubServers]=usePanelState('subServers',[]);
+    const [subServer,setSubServer]=usePanelState('subServer','');
+    const [subAccounts,setSubAccounts]=usePanelState('subAccounts',[]);
+    const [subSelection,setSubSelection]=usePanelState('subSelection',[]);
+    const [advancedBusy,setAdvancedBusy]=usePanelState('advancedBusy',false);
+    const [advancedError,setAdvancedError]=usePanelState('advancedError','');
+    const [poolsLoaded,setPoolsLoaded]=usePanelState('poolsLoaded',false);
+    const mainRef=useRef(null);
+    const tabRef=useRef(tab);
+    tabRef.current=tab;
     const endpoint=useMemo(()=>urlClean(baseUrl),[baseUrl]);
     const data=health.data,acc=data?.accounts||{};
     const online=!!data&&!health.error;
     const ready=!!data?.healthy;
     function reload(){setHealth(x=>({...x,loading:true,error:''}));setRefreshTick(x=>x+1)}
+    function refreshInBackground(){setRefreshTick(x=>x+1)}
     useEffect(()=>{
-      const id='c2a-native-dashboard-css';let el=document.getElementById(id),created=false;
-      if(!el){el=document.createElement('style');el.id=id;el.textContent=STYLES;document.head.appendChild(el);created=true}
-      return()=>{if(created&&el?.isConnected)el.remove()};
+      // Keep the stylesheet for the whole client session: removing it on every
+      // panel switch made the returning page paint unstyled for a frame, which
+      // is most of what "the page reloaded" looked like.
+      const id='c2a-native-dashboard-css';
+      if(document.getElementById(id))return;
+      const el=document.createElement('style');el.id=id;el.textContent=STYLES;document.head.appendChild(el);
+    },[]);
+    useIsoLayoutEffect(()=>{
+      const el=mainRef.current;if(!el)return;
+      const top=tabScroll.get(tab)||0;
+      el.scrollTop=top;
+      // Images restored from cache may finish decoding after layout and grow
+      // the page; re-apply once so the returning view keeps its position.
+      if(top&&typeof requestAnimationFrame==='function'){
+        const raf=requestAnimationFrame(()=>{if(el.isConnected)el.scrollTop=top});
+        return()=>cancelAnimationFrame(raf);
+      }
+    },[tab]);
+    useEffect(()=>{
+      const el=mainRef.current;
+      if(!el||typeof el.addEventListener!=='function')return;
+      let raf=0;
+      const onScroll=()=>{
+        if(raf)return;
+        const owner=tabRef.current,top=el.scrollTop;
+        const remember=()=>{raf=0;tabScroll.set(owner,top)};
+        raf=typeof requestAnimationFrame==='function'?requestAnimationFrame(remember):setTimeout(remember,80);
+      };
+      el.addEventListener('scroll',onScroll,{passive:true});
+      return()=>{
+        el.removeEventListener('scroll',onScroll);
+        if(typeof cancelAnimationFrame==='function')cancelAnimationFrame(raf);else clearTimeout(raf);
+      };
     },[]);
     useEffect(()=>{
       let alive=true;
@@ -145,7 +250,7 @@ function createChatGPT2APIDashboard(React, STYLES) {
         try{
           const result=await upstream('/health?format=json',{timeoutMs:9000});
           if(alive){setHealth({loading:false,data:result,error:''});setBaseUrl(result?.baseUrl||DEFAULT_URL)}
-        }catch(e){if(alive)setHealth({loading:false,data:null,error:shortError(e)})}
+        }catch(e){if(alive)setHealth(x=>({...x,loading:false,error:shortError(e)}))}
       };
       load();const timer=setInterval(load,15000);
       return()=>{alive=false;clearInterval(timer)};
@@ -163,9 +268,12 @@ function createChatGPT2APIDashboard(React, STYLES) {
       }catch(e){if(controller.signal.aborted)throw Error('服务请求超时');throw e}finally{clearTimeout(t)}
     }
     useEffect(()=>{
-      if(tab==='accounts'){void listAccounts();void listCredentials();}
-      if(tab==='api')void loadUserKeys();
-      if(tab==='advanced')void refreshPools();
+      // Revalidate in the background when a snapshot already exists, so a
+      // returning panel shows its previous content and then updates in place
+      // instead of flashing "加载中…" like a fresh page load.
+      if(tab==='accounts'){void listAccounts({silent:pool.loaded});void listCredentials();}
+      else if(tab==='api')void loadUserKeys({silent:userKeysLoaded});
+      else if(tab==='advanced')void refreshPools({silent:poolsLoaded});
     },[tab]);
     function copyWithFeedback(text, id){
       copyToClipboard(text, ()=>{
@@ -186,26 +294,83 @@ function createChatGPT2APIDashboard(React, STYLES) {
         return {...item,key:k};
       });
     }
-    async function loadUserKeys(){
-      setUserKeyBusy(true);setUserKeyError('');
+    async function loadUserKeys({silent=false}={}){
+      if(!silent)setUserKeyBusy(true);
+      setUserKeyError('');
       try{
         const json=await upstream('/api/auth/users',{timeoutMs:15000});
         setUserKeys(mergeUserKeysWithLocal(json?.items));
-      }catch(e){setUserKeyError(shortError(e))}finally{setUserKeyBusy(false)}
+        setUserKeysLoaded(true);
+      }catch(e){setUserKeyError(shortError(e))}finally{if(!silent)setUserKeyBusy(false)}
+    }
+    function generateRandomApiKey(){
+      const chars='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+      let s='';
+      if(globalThis.crypto?.getRandomValues){
+        const b=new Uint8Array(28);
+        globalThis.crypto.getRandomValues(b);
+        for(let i=0;i<28;i++) s+=chars[b[i]%chars.length];
+      }else{
+        for(let i=0;i<28;i++) s+=chars[Math.floor(Math.random()*chars.length)];
+      }
+      return 'sk-'+s;
+    }
+    async function resetUserKey(id, customKey=null){
+      let nextKey=(customKey?String(customKey).trim():'');
+      if(!nextKey){
+        nextKey=generateRandomApiKey();
+      }
+      setUserKeyBusy(true);setUserKeyError('');
+      try{
+        const json=await upstream('/api/auth/users/'+encodeURIComponent(String(id)),{
+          method:'POST',
+          body:{key:nextKey},
+          timeoutMs:15000
+        });
+        saveLocalUserKey(id,nextKey);
+        setUserKeyPlain(nextKey);
+        const merged=mergeUserKeysWithLocal(json?.items);
+        setUserKeys(merged);
+        copyWithFeedback(nextKey,'new-key');
+      }catch(e){
+        setUserKeyError(shortError(e));
+      }finally{
+        setUserKeyBusy(false);
+      }
+    }
+    async function promptCustomKey(item){
+      const currentName=item?.name||'该密钥';
+      const input=globalThis.prompt?.(`为「${currentName}」设置自定义 API Key（留空将自动生成随机 sk- 密钥）：`,'');
+      if(input===null)return;
+      await resetUserKey(item.id, input.trim()||null);
     }
     async function createUserKey(){
       const name=userKeyName.trim()||'本机应用';
+      const customKey=userKeyCustom.trim();
       setUserKeyBusy(true);setUserKeyError('');setUserKeyPlain('');
       try{
         const json=await upstream('/api/auth/users',{method:'POST',body:{name},timeoutMs:15000});
-        const rawKey=String(json.key||'');
-        setUserKeyPlain(rawKey);
         const rawItems=Array.isArray(json.items)?json.items:[];
-        const newId=String(json.id||json.item?.id||rawItems.find(x=>x.key===rawKey||x.name===name)?.id||'');
-        if(newId&&rawKey){
-          saveLocalUserKey(newId,rawKey,name);
+        const newId=String(json.id||json.item?.id||rawItems.find(x=>x.name===name)?.id||'');
+        let finalKey=String(json.key||'');
+        if(customKey&&newId){
+          const upd=await upstream('/api/auth/users/'+encodeURIComponent(newId),{
+            method:'POST',
+            body:{key:customKey},
+            timeoutMs:15000
+          });
+          finalKey=customKey;
+          saveLocalUserKey(newId,finalKey,name);
+          setUserKeys(mergeUserKeysWithLocal(upd?.items));
+        }else{
+          if(newId&&finalKey){
+            saveLocalUserKey(newId,finalKey,name);
+          }
+          setUserKeys(mergeUserKeysWithLocal(rawItems));
         }
-        setUserKeys(mergeUserKeysWithLocal(rawItems));
+        setUserKeyPlain(finalKey);
+        setUserKeyCustom('');
+        copyWithFeedback(finalKey,'new-key');
       }catch(e){setUserKeyError(shortError(e))}finally{setUserKeyBusy(false)}
     }
     async function revokeUserKey(id){
@@ -230,10 +395,11 @@ function createChatGPT2APIDashboard(React, STYLES) {
       try{const r=await upstream('/api/accounts',{method:'POST',body,timeoutMs:150000});setImportJson('');setImportMessage(`导入成功，新增 ${r?.added??'—'} 个，跳过 ${r?.skipped??'—'} 个。`);await listAccounts()}
       catch(e){setAdvancedError(shortError(e))}finally{setAdvancedBusy(false)}
     }
-    async function refreshPools(){
-      setAdvancedBusy(true);setAdvancedError('');
-      try{const [a,b]=await Promise.all([upstream('/api/cpa/pools'),upstream('/api/sub2api/servers')]);setCpaPools(Array.isArray(a?.pools)?a.pools:[]);setSubServers(Array.isArray(b?.servers)?b.servers:[])}
-      catch(e){setAdvancedError(shortError(e))}finally{setAdvancedBusy(false)}
+    async function refreshPools({silent=false}={}){
+      if(!silent)setAdvancedBusy(true);
+      setAdvancedError('');
+      try{const [a,b]=await Promise.all([upstream('/api/cpa/pools'),upstream('/api/sub2api/servers')]);setCpaPools(Array.isArray(a?.pools)?a.pools:[]);setSubServers(Array.isArray(b?.servers)?b.servers:[]);setPoolsLoaded(true)}
+      catch(e){setAdvancedError(shortError(e))}finally{if(!silent)setAdvancedBusy(false)}
     }
     async function createCpaPool(){
       if(!cpaDraft.base_url||!cpaDraft.secret_key){setAdvancedError('请输入 CPA 服务器地址和密钥');return}
@@ -261,10 +427,13 @@ function createChatGPT2APIDashboard(React, STYLES) {
       try{await upstream('/api/sub2api/servers/'+encodeURIComponent(subServer)+'/import',{method:'POST',body:{account_ids:subSelection},timeoutMs:30000});setImportMessage('sub2api 导入任务已提交；请在号池页刷新账号列表。');setSubSelection([])}
       catch(e){setAdvancedError(shortError(e))}finally{setAdvancedBusy(false)}
     }
-    async function listAccounts(){
-      setPool(x=>({...x,loading:true,error:''}));
-      try{const json=await upstream('/api/accounts',{timeoutMs:15000});setPool({loading:false,items:Array.isArray(json.items)?json.items:[],error:'',message:'已更新账号列表'});reload()}
-      catch(e){setPool(x=>({...x,loading:false,error:shortError(e)}))}
+    async function listAccounts({silent=false}={}){
+      if(!silent)setPool(x=>({...x,loading:true,error:''}));
+      try{
+        const json=await upstream('/api/accounts',{timeoutMs:15000});
+        setPool(x=>({...x,loading:false,loaded:true,items:Array.isArray(json.items)?json.items:[],error:'',message:silent?x.message:'已更新账号列表'}));
+        if(silent)refreshInBackground();else reload();
+      }catch(e){setPool(x=>({...x,loading:false,error:shortError(e)}))}
     }
     async function listCredentials(){
       try{const r=await upstream('/local/credential-vault',{timeoutMs:15000});setCredentialItems(Array.isArray(r?.items)?r.items:[]);setCredentialError('')}
@@ -362,7 +531,7 @@ function createChatGPT2APIDashboard(React, STYLES) {
         const first=result?.data?.[0];const output=first?.b64_json?'data:image/png;base64,'+first.b64_json:first?.url||'';
         if(!output)throw Error('生成服务未返回图片');
         setImageResult({loading:false,url:output,error:''});reload();
-      }catch(e){setImageResult({loading:false,url:'',error:ctrl.signal.aborted?'生成等待超时':shortError(e)})}
+      }catch(e){setImageResult({loading:false,url:'',error:ctrl.signal.aborted?'生成等待超时':imageFailureText(shortError(e))})}
       finally{clearTimeout(timer)}
     }
     const notes=[['当前账号',acc.total,'◉'],['可用账号',acc.active,'✓'],['限流账号',acc.limited,'◷'],['剩余额度',acc.total_quota,'▦'],['成功调用',acc.total_success,'↗'],['失败调用',acc.total_fail,'!']];
@@ -372,7 +541,7 @@ function createChatGPT2APIDashboard(React, STYLES) {
         h('div',{className:'c2a-headright'},h(Chip,{kind:online?(ready?'success':'warning'):'danger'},online?(ready?'号池运行中':'暂无可用账号'):'后端未就绪'),h('span',{className:'c2a-version'},online?'v'+(data.version||'—'):'插件 v0.6.0'),h(Btn,{onClick:reload,disabled:health.loading},health.loading?'检测中…':'刷新'))
       ),
       h('nav',{className:'c2a-tabbar','aria-label':'号池功能'},...PAGES.map(([id,label,icon])=>h('button',{key:id,type:'button',className:'c2a-tab'+(tab===id?' selected':''),onClick:()=>setTab(id)},h('span',{className:'c2a-tabicon'},icon),label))),
-      h('main',{className:'c2a-main'},
+      h('main',{className:'c2a-main',ref:mainRef},
         tab==='overview'?h(React.Fragment,null,
           h('section',{className:'c2a-hero'},
             h('div',null,h('div',{className:'c2a-kicker'},h('span',{className:'c2a-dot '+(ready?'on':'')},'●'),'跨平台 内置 Python 运行时 / 独立 API 服务'),
@@ -470,7 +639,8 @@ function createChatGPT2APIDashboard(React, STYLES) {
           ),
           h(Card,{title:'创建第三方调用 API Key'},
             h('div',{className:'c2a-formrow'},
-              h('input',{value:userKeyName,'aria-label':'新 API Key 名称',onChange:e=>setUserKeyName(e.target.value),placeholder:'例如：Cherry Studio、插件 C'}),
+              h('input',{value:userKeyName,'aria-label':'新 API Key 名称',onChange:e=>setUserKeyName(e.target.value),placeholder:'名称，例如：Cherry Studio'}),
+              h('input',{value:userKeyCustom,'aria-label':'自定义密钥（可选）',onChange:e=>setUserKeyCustom(e.target.value),placeholder:'自定义密钥（可选，留空自动生成）'}),
               h(Btn,{primary:true,onClick:createUserKey,disabled:userKeyBusy},userKeyBusy?'处理中…':'生成用户密钥'),
               h(Btn,{onClick:loadUserKeys,disabled:userKeyBusy},'刷新密钥列表')
             ),
@@ -509,7 +679,7 @@ function createChatGPT2APIDashboard(React, STYLES) {
                 const keyStr=String(x?.key||'');
                 const hasKey=Boolean(keyStr);
                 const isRevealed=Boolean(revealedKeys[id]);
-                const display=hasKey?(isRevealed?keyStr:(keyStr.length>12?keyStr.slice(0,6)+'••••••••'+keyStr.slice(-4):'••••••••')):'sk-••••••••（未缓存）';
+                const display=hasKey?(isRevealed?keyStr:(keyStr.length>12?keyStr.slice(0,6)+'••••••••'+keyStr.slice(-4):'••••••••')):'sk-•••••••• (历史哈希)';
                 const isCopied=copiedId===id;
                 return h('tr',{key:id},
                   h('td',null,
@@ -517,15 +687,39 @@ function createChatGPT2APIDashboard(React, STYLES) {
                     x?.id?h('small',null,'ID: '+x.id):null
                   ),
                   h('td',null,
-                    h('div',{className:'c2a-key-cell'},
-                      h('code',{className:'c2a-key-code',title:hasKey?(isRevealed?'点击隐藏':'点击显示完整密钥'):'仅创建时可获取完整明文'},display),
-                      hasKey?h(Btn,{
+                    hasKey?h('div',{className:'c2a-key-cell'},
+                      h('code',{className:'c2a-key-code',title:isRevealed?'点击隐藏':'点击显示完整明文'},display),
+                      h(Btn,{
+                        style:{padding:'3px 8px',fontSize:'11px'},
                         onClick:()=>toggleReveal(id)
-                      },isRevealed?'隐藏':'显示'):null,
-                      hasKey?h(Btn,{
+                      },isRevealed?'隐藏':'显示'),
+                      h(Btn,{
                         cls:isCopied?'copied':'',
+                        style:{padding:'3px 8px',fontSize:'11px'},
                         onClick:()=>copyWithFeedback(keyStr,id)
-                      },isCopied?'✓ 已复制':'复制'):null
+                      },isCopied?'✓ 已复制':'复制'),
+                      h(Btn,{
+                        style:{padding:'3px 8px',fontSize:'11px'},
+                        disabled:userKeyBusy,
+                        onClick:()=>resetUserKey(id),
+                        title:'重新生成随机密钥'
+                      },'重置')
+                    ):h('div',{className:'c2a-key-cell',style:{gap:'6px'}},
+                      h('code',{className:'c2a-key-code',style:{color:'#9a5b13',background:'#fff7eb'},title:'历史旧版本仅存储了不可逆哈希。点击右侧按钮立即生成新明文并复制！'},display),
+                      h(Btn,{
+                        primary:true,
+                        cls:isCopied?'copied':'',
+                        style:{padding:'3px 10px',fontSize:'11px',fontWeight:'600'},
+                        disabled:userKeyBusy,
+                        onClick:()=>resetUserKey(id),
+                        title:'立即为此历史条目重新生成新密钥并直接复制'
+                      },isCopied?'✓ 已复制新密钥':'🎲 重新生成并复制'),
+                      h(Btn,{
+                        style:{padding:'3px 8px',fontSize:'11px'},
+                        disabled:userKeyBusy,
+                        onClick:()=>promptCustomKey(x),
+                        title:'手动设置自定义密钥或填回已知密钥'
+                      },'✏️ 设置密钥')
                     )
                   ),
                   h('td',null,h('span',{style:{fontSize:'11px',color:'var(--muted)'}},formatKeyDate(x?.created_at))),
@@ -548,6 +742,7 @@ function createChatGPT2APIDashboard(React, STYLES) {
             h(Card,{title:'创建生图任务'},
               h('label',{className:'c2a-fieldlabel'},'提示词'),
               h('textarea',{className:'c2a-textarea',value:prompt,onChange:e=>setPrompt(e.target.value),rows:5,'aria-label':'提示词'}),
+              h('p',{className:'c2a-help'},'提示：真实人物写真、性感或身体特写类描述容易被上游安全策略拒绝并返回 400；插画、水彩、景物或虚构角色更稳定。'),
               h('label',{className:'c2a-fieldlabel'},'参考图片（最多 4 张，可不选）'),
               h('input',{type:'file',accept:'image/png,image/jpeg,image/webp',multiple:true,'aria-label':'参考图片',onChange:e=>setImageFiles(Array.from(e.target.files||[]).slice(0,5))}),
               h('p',{className:'c2a-help'},imageFiles.length?'已选择 '+imageFiles.length+' 张参考图；每张最大 12MB。':'不选择图片则走文生图；选择参考图则走图片编辑接口。'),
@@ -612,5 +807,5 @@ function createChatGPT2APIDashboard(React, STYLES) {
       h('footer',{className:'c2a-footer'},h('span',null,'ChatGPT2API Native · 跨平台 x64 · DSH Host + OpenAI 兼容 HTTP API'),h('span',null,'管理免密码 · 第三方 API Key 独立隔离'))
     );
   }
-  return {Dashboard,HeaderIcon,urlClean,PANEL};
+  return {Dashboard,HeaderIcon,urlClean,PANEL,imageFailureText,DEFAULT_PROMPT};
 }

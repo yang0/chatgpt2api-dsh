@@ -21,3 +21,4 @@
 .c2a-newkey-input:focus{outline:none;border-color:#3569ed;box-shadow:0 0 0 3px rgba(53,105,237,0.15)}
 .c2a-newkey-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 
+.c2a-alert{white-space:pre-line}
