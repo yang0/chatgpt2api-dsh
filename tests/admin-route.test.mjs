@@ -1,0 +1,131 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {createAdminHandler,createAdminRoute,ADMIN_ROUTE} from '../lib/admin-route.js';
+
+const SECRET='host-private-secret-which-client-never-sees';
+const TOKEN='upstream_access_token_supersecret';
+const headerStore=[];
+const calls=[];
+const fetcher=async (url,opts)=>{
+  calls.push({url,method:opts.method,body:opts.body&&JSON.parse(opts.body)});
+  headerStore.push(opts.headers.Authorization);
+  const route=new URL(url).pathname;
+  let data;
+  if(route==='/api/accounts'&&opts.method==='GET')data={items:[{access_token:TOKEN,refresh_token:'refreshsecret',id_token:'idsecret',email:'a@example.com',status:'normal',type:'plus',quota:10}]};
+  else if(route==='/api/accounts'&&opts.method==='DELETE')data={removed:1,items:[]};
+  else if(route==='/api/accounts/refresh')data={progress_id:'progress123',items:[]};
+  else if(route==='/api/accounts'&&opts.method==='POST')data={added:1,skipped:0,items:[{access_token:TOKEN}],errors:['oops with '+TOKEN]};
+  else if(route==='/api/auth/users'&&opts.method==='GET')data={items:[{id:'abcdef012345',name:'Cherry Studio',enabled:true,created_at:'2026-11-04',key_hash:'secret-hash'}]};
+  else if(route==='/api/auth/users'&&opts.method==='POST')data={key:'userkey123456',items:[{id:'abcdef012345',name:'Cherry Studio',enabled:true}]};
+  else if(route==='/api/auth/users/abcdef012345')data={items:[]};
+  else if(route==='/health')data={status:'ok',healthy:true,version:'test',accounts:{total:1,active:1}};
+  else if(route==='/api/cpa/pools')data={pools:[{id:'cpa1',name:'pool',base_url:'https://service.test',secret_key:'hidden'}]};
+  else if(route==='/api/sub2api/servers')data={servers:[{id:'sub1',name:'srv',base_url:'https://service.test',api_key:'hidden'}]};
+  else if(route==='/v1/images/generations')data={data:[{b64_json:'aW1hZ2U='}]};
+  else throw new Error('mock unhandled: '+route);
+  return {status:200,ok:true,headers:{get:()=>null},text:async()=>JSON.stringify(data)};
+};
+const backend=createAdminHandler({baseUrl:'http://127.0.0.1:38650',secret:SECRET,fetcher});
+function req(body){return new Request('http://localhost/api/chatgpt2api-native/manage',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})}
+async function call(payload){let res=await backend.route(req(payload));return {status:res.status,body:await res.json(),cache:res.headers.get('Cache-Control')}}
+
+test('register passwordless management only via DSH exact authenticated Connection route',()=>{
+  const route=createAdminRoute({_adminKey:SECRET,baseUrl:'http://127.0.0.1:38650'});
+  assert.equal(route.path,ADMIN_ROUTE);
+  assert.deepEqual(route.methods,['POST']);
+  assert.equal(route.requestBody,'buffered');
+  assert.equal(typeof route.fetch,'function');
+});
+test('fetch health and accounts without browser admin key, never leak upstream credentials',async()=>{
+  let res=await call({path:'/health?format=json'});
+  assert.equal(res.body.accounts.active,1);assert.equal(res.body.baseUrl,'http://127.0.0.1:38650');assert.equal(res.cache,'no-store');
+  res=await call({path:'/api/accounts'});
+  assert.equal(res.body.items.length,1);
+  assert.match(res.body.items[0].ref,/^[a-f0-9]{64}$/);
+  assert.doesNotMatch(JSON.stringify(res.body),/upstream_access_token|refreshsecret|idsecret/);
+  assert.ok(headerStore.every(x=>x===`Bearer ${SECRET}`));
+});
+test('account deletion and refresh use opaque reference resolved by Host only',async()=>{
+  const res=await call({path:'/api/accounts'});const ref=res.body.items[0].ref;
+  const removed=await call({path:'/api/accounts',method:'DELETE',body:{tokens:[ref]}});
+  assert.equal(removed.body.ok,true);
+  const lastDelete=calls.filter(x=>x.method==='DELETE').at(-1);
+  assert.equal(lastDelete.body.tokens[0],TOKEN);
+  const refresh=await call({path:'/api/accounts/refresh',method:'POST',body:{access_tokens:[ref]}});
+  assert.equal(refresh.body.progress_id,'progress123');
+});
+test('independent user API keys stay separate from Host admin secret',async()=>{
+  const created=await call({path:'/api/auth/users',method:'POST',body:{name:'Cherry Studio'}});
+  assert.equal(created.body.key,'userkey123456');assert.ok(!JSON.stringify(created.body).includes(SECRET));
+  const listed=await call({path:'/api/auth/users'});
+  assert.equal(listed.body.items[0].id,'abcdef012345');
+  assert.ok(!JSON.stringify(listed.body).includes('key_hash'));
+});
+test('generic or malicious paths are not forwarded to upstream',async()=>{
+  const n=calls.length;
+  for(const path of ['/api/settings','/api/accounts/oauth/start','http://attacker/','/api/../../api/settings']){
+    const res=await call({path});assert.equal(res.status,404);
+  }
+  assert.equal(calls.length,n);
+});
+test('CPA/sub2api connection secrets are stripped from UI response',async()=>{
+  const cpa=await call({path:'/api/cpa/pools'}),sub=await call({path:'/api/sub2api/servers'});
+  assert.doesNotMatch(JSON.stringify(cpa.body),/secret_key/);
+  assert.doesNotMatch(JSON.stringify(sub.body),/api_key/);
+});
+test('image generation uses protected Host bridge, not upstream auth in browser',async()=>{
+  const result=await call({path:'/v1/images/generations',method:'POST',body:{model:'gpt-image-2',prompt:'An original scene',n:1}});
+  assert.equal(result.body.data[0].b64_json,'aW1hZ2U=');
+});
+test('sensitive import errors and upstream items are not returned to browser',async()=>{
+  const result=await call({path:'/api/accounts',method:'POST',body:{tokens:[TOKEN]}});
+  assert.equal(result.body.added,1);
+  assert.equal(result.body.errorCount,1);
+  assert.doesNotMatch(JSON.stringify(result.body),/upstream_access_token/);
+});
+test('direct text authentication converts credentials to tokens and enrolls to upstream',async()=>{
+  let registered=null;
+  const mockFetcher=async (url,opts)=>{
+    if(url.endsWith('/api/accounts')&&opts.method==='POST'){
+      registered=JSON.parse(opts.body);
+      return {status:200,ok:true,headers:{get:()=>null},text:async()=>JSON.stringify({added:1,skipped:0,refreshed:1,errors:[]})};
+    }
+    return {status:200,ok:true,headers:{get:()=>null},text:async()=>JSON.stringify({})};
+  };
+  const mockAuth=async ({accounts})=>({
+    results: accounts.map(a=>({
+      id: a.id,
+      email: a.email,
+      ok: true,
+      access_token: 'secret_token_12345',
+      refresh_token: 'rt_secret_67890',
+      id_token: 'id_secret_abc'
+    }))
+  });
+  const mockVault={list:()=>({count:0,items:[]}),getAll:()=>[],get:()=>null,delete:()=>{},updateStatus:()=>{},importText:()=>{}};
+  const handler=createAdminHandler({
+    baseUrl:'http://127.0.0.1:38650',
+    secret:SECRET,
+    fetcher:mockFetcher,
+    vault:mockVault,
+    authenticator:mockAuth
+  });
+  const request=new Request('http://localhost/api/chatgpt2api-native/manage',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({
+      path:'/local/credential-vault/authenticate',
+      method:'POST',
+      body:{text:'direct@example.com----p@ssword----TOTPSECRET123'}
+    })
+  });
+  const res=await handler.route(request);
+  const data=await res.json();
+  assert.equal(data.total,1);
+  assert.equal(data.succeeded,1);
+  assert.equal(data.enrolled.added,1);
+  assert.equal(registered.tokens[0],'secret_token_12345');
+  assert.equal(registered.accounts[0].email,'direct@example.com');
+  assert.equal(registered.accounts[0].totp_secret,'TOTPSECRET123');
+  assert.doesNotMatch(JSON.stringify(data),/secret_token|rt_secret|p@ssword|TOTPSECRET/);
+});

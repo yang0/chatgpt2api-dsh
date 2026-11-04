@@ -1,0 +1,8 @@
+- insert:
+    - id: chatgpt2api-native
+      name: dsh-plugin-chatgpt2api
+      config:
+        port: 38650
+        autoStart: true
+        timeoutMs: 240000
+        apiKeyEnv: DSH_CHATGPT2API_KEY

@@ -1,0 +1,41 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import vm from 'node:vm';
+const root=path.resolve(import.meta.dirname,'..');
+test('independent DSH client/host bundle manifests native service',()=>{
+  const pkg=JSON.parse(fs.readFileSync(path.join(root,'package.json'),'utf8'));
+  assert.equal(pkg.name,'dsh-plugin-chatgpt2api');assert.equal(pkg.version,'0.6.0');
+  assert.equal(pkg.dsh.client.platform,'web');assert.equal(pkg.dsh.bundle.patch,'./cordis.patch.yml');
+  const patch=fs.readFileSync(path.join(root,'cordis.patch.yml'),'utf8');
+  assert.match(patch,/id: chatgpt2api-native/);assert.match(patch,/port: 38650/);
+  const host=fs.readFileSync(path.join(root,'lib/index.js'),'utf8');
+  assert.match(host,/super\(ctx,'chatgpt2api'\)/);
+  assert.match(host,/new PlatformBackend/);assert.match(host,/chatCompletion/);
+  assert.doesNotMatch(host,/AIPoseStudio/);
+  assert.match(host,/ctx.inject/);assert.match(host,/createAdminRoute/);
+  assert.match(host,/connection.fetch.register/);
+});
+test('browser plugin mounts independent navigation + main panel',()=>{
+  let module=null;
+  vm.runInNewContext(fs.readFileSync(path.join(root,'lib/client.js'),'utf8'),{URL,__ModuleLoader__:{load(obj){module=obj.factory(()=>({createElement(){},useState(){},useEffect(){},useMemo(){}}))}}},{timeout:2500});
+  assert.ok(module?.apply);
+  const slots=[];
+  module.apply({slots:{inject(_name,cb){return cb()},register(def){slots.push(def);return ()=>{}}}});
+  assert.deepEqual(slots.map(x=>x.name),['sidebar.panellist','main']);
+  assert.equal(module.__test.urlClean('http://127.0.0.1:38650'),'http://127.0.0.1:38650');
+  assert.equal(module.__test.urlClean('file:///etc/passwd'),null);
+});
+test('package contains cross-platform bootstrap and no standalone Docker dependency',()=>{
+  const pkg=JSON.parse(fs.readFileSync(path.join(root,'package.json'),'utf8'));
+  assert.ok(fs.existsSync(path.join(root,'lib/platform-backend.js')));
+  assert.ok(fs.existsSync(path.join(root,'lib/archive.js')));
+  assert.doesNotMatch(fs.readFileSync(path.join(root,'lib/index.js'),'utf8'),/AIPoseStudio/);
+  const ui=fs.readFileSync(path.join(root,'lib/client.js'),'utf8');
+  assert.match(ui,/API 接入/);assert.doesNotMatch(ui,/AIPoseStudio/);
+  assert.doesNotMatch(ui,/show-admin-key/);
+  assert.doesNotMatch(ui,/请输入管理员/);
+  assert.match(ui,/chatgpt2api-native\/manage/);
+  assert.match(ui,/邮箱 \/ 密码 \/ 第三字段批量导入/);
+});

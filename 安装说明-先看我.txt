@@ -1,0 +1,30 @@
+ChatGPT2API Native v0.6.0（DSH 跨平台无 Docker 版）
+
+【支持】
+- Windows 10/11 x64；Windows 11 ARM64（实验性）
+- macOS Intel / Apple Silicon
+- Linux x64 / ARM64（GNU / musl，需现代运行环境）
+
+【安装】
+1. 关闭 DSH 并备份原号池目录；禁用旧的同名插件。
+2. 解压 ZIP 到固定位置，保持目录结构完整。
+3. Windows：dsh plugin --profile web add "link:C:/DSH/plugins/dsh-plugin-chatgpt2api"
+   macOS/Linux：dsh plugin --profile web add "link:/你的/绝对路径/dsh-plugin-chatgpt2api"
+4. 重新运行 dsh web，在侧栏打开「ChatGPT2API」。
+5. 第一次运行自动下载平台专属 uv + 隔离 Python 3.13 + chatgpt2api 源码和依赖；需要联网、无需 Docker，不用单独启动后端。
+6. 管理页面免手动输入管理员密码；第三方软件需在 API 接入页创建用户 API Key。
+7. API 地址：http://127.0.0.1:38650/v1
+
+【注意】
+- 邮箱----密码----第三字段导入只做加密暂存，不会自动产生可用访问 Token。
+- 账号数据目录：Windows %USERPROFILE%\.dsh\chatgpt2api-native\；macOS/Linux ~/.dsh/chatgpt2api-native/
+- Windows 旧版数据默认保持原位置不动。
+- 本版 3 平台真机安装与账号登录、生图仍需你在对应系统联调，不承诺即装即成功。
+- 上游是非官方逆向项目，请遵守其用途限制和服务条款。
+
+【故障排查】
+node scripts/manage-backend.mjs status
+node scripts/manage-backend.mjs log
+node scripts/check-backend.mjs
+
+完整说明请看 README.md。
