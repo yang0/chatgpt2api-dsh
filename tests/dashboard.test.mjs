@@ -64,7 +64,7 @@ test('native workbench has account pool, import, and standalone image tabs',()=>
   const imageNav=ui.find(apiPage,n=>n.type==='button'&&n.props?.className?.includes('c2a-tab')&&ui.flatten(n).includes('图片生成'));
   assert.ok(imageNav);imageNav.props.onClick();
   const image=ui.flatten(ui.render());labels=ui.text(image);
-  assert.match(labels,/创建生图任务/);assert.match(labels,/参考图片/);
+  assert.match(labels,/创建生图任务/);assert.match(labels,/参考图片/);assert.match(labels,/打开历史图片文件夹/);
 });
 
 test('leaving and re-entering the panel restores the tab and drafts instead of reloading',()=>{

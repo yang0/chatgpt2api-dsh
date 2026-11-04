@@ -194,3 +194,38 @@ test('user API key creation retains plain key and exposes it in user list', asyn
   assert.equal(keyStore.get('usr_abc123'), '');
 });
 
+test('opening the local image history folder only accepts the fixed Host path', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'c2a-test-images-'));
+  try {
+    fs.writeFileSync(path.join(dir, 'a.png'), 'x');
+    fs.writeFileSync(path.join(dir, 'b.txt'), 'x');
+    let opened = null;
+    const handler = createAdminHandler({
+      baseUrl: 'http://127.0.0.1:38650',
+      secret: SECRET,
+      fetcher,
+      imagesDir: dir,
+      openFolder: async (target) => { opened = target; },
+    });
+    const exec = async (payload) => {
+      const res = await handler.route(new Request('http://localhost/api/chatgpt2api-native/manage', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)}));
+      return {status: res.status, body: await res.json()};
+    };
+
+    const ok = await exec({path: '/local/open-images-dir', method: 'POST'});
+    assert.equal(ok.status, 200);
+    assert.equal(ok.body.opened, true);
+    assert.equal(ok.body.count, 1);
+    assert.equal(opened, path.resolve(dir));
+
+    const get = await exec({path: '/local/open-images-dir', method: 'GET'});
+    assert.equal(get.status, 405);
+
+    const external = createAdminHandler({baseUrl: 'http://127.0.0.1:38650', secret: SECRET, fetcher});
+    const res = await external.route(new Request('http://localhost/api/chatgpt2api-native/manage', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({path: '/local/open-images-dir', method: 'POST'})}));
+    assert.equal(res.status, 503);
+  } finally {
+    fs.rmSync(dir, {recursive: true, force: true});
+  }
+});
+
