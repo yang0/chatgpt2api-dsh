@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import {EventEmitter} from 'node:events';
-import {PlatformBackend,managedPaths,resolvePlatform,ensureManagedFiles,validatePort,DEFAULT_PORT,SOURCE_COMMIT,UV_VERSION} from '../lib/platform-backend.js';
+import {PlatformBackend,managedPaths,resolvePlatform,ensureManagedFiles,validatePort,DEFAULT_PORT,SOURCE_COMMIT,UV_VERSION,detectSystemPython,probePythonExecutable} from '../lib/platform-backend.js';
 
 const temp=()=>fs.mkdtempSync(path.join(os.tmpdir(),'dsh-c2a-v06-'));
 const cases=[
@@ -111,4 +111,63 @@ test('disabled startup does not download or request credentials',async t=>{
   const b=new PlatformBackend({dataDir:root,autoStart:false},{platform:'darwin',arch:'arm64'});
   assert.equal((await b.start()).phase,'disabled');
   assert.equal(fs.readdirSync(root).length,0);
+});
+
+
+test('probePythonExecutable safely returns null for invalid executables', () => {
+  assert.equal(probePythonExecutable(''), null);
+  assert.equal(probePythonExecutable('definitely-not-a-real-python-binary-12345'), null);
+});
+
+test('PlatformBackend reuses detected system Python and skips uv python download', async t => {
+  const root = temp();
+  t.after(() => fs.rmSync(root, {force: true, recursive: true}));
+  const dummy = Buffer.from('pretend archive version 0.9.13');
+  const commands = [];
+  const downloader = async (url, file, opts) => { fs.mkdirSync(path.dirname(file), {recursive: true}); fs.writeFileSync(file, dummy); };
+  const extractor = (archive, dest) => {
+    if (archive.endsWith('.tar.gz') || archive.includes('uv-')) {
+      fs.mkdirSync(path.dirname(dest), {recursive: true}); fs.writeFileSync(dest, 'fake-uv');
+    } else {
+      const dir = path.join(dest, `chatgpt2api-${SOURCE_COMMIT}`);
+      fs.mkdirSync(dir, {recursive: true});
+      for (const file of ['pyproject.toml', 'uv.lock', 'main.py']) fs.writeFileSync(path.join(dir, file), 'stub');
+      for (const folder of ['api', 'services', 'utils']) fs.mkdirSync(path.join(dir, folder));
+    }
+  };
+  const child = new EventEmitter(); child.stdout = new EventEmitter(); child.stderr = new EventEmitter(); child.pid = 999; child.kill = () => {};
+  const executor = async (bin, args) => {
+    commands.push({bin, args});
+    if (args[0] === 'sync') {
+      const py = path.join(root, 'source', '.venv', 'bin', 'python');
+      fs.mkdirSync(path.dirname(py), {recursive: true}); fs.writeFileSync(py, 'python-stub');
+    }
+    return '';
+  };
+
+  const fakeSysPy = '/usr/local/bin/python3.13';
+  const backend = new PlatformBackend({dataDir: root}, {
+    platform: 'linux', arch: 'x64', libc: 'gnu',
+    downloader, extractZip: extractor, extractTar: extractor, executor,
+    systemPythonFinder: () => ({path: fakeSysPy, version: '3.13', major: 3, minor: 13, source: 'system'}),
+    spawner: (bin, args, opts) => child,
+    portProbe: async () => {},
+    fetcher: async () => ({ok: true, json: async () => ({status: 'ok'})}),
+    sleeper: async () => {},
+    groupKiller: () => {}
+  });
+  backend.spec.sha256 = crypto.createHash('sha256').update(dummy).digest('hex');
+  const result = await backend.start();
+
+  assert.equal(result.phase, 'ready');
+  // Must skip uv python install (0 calls)
+  assert.equal(commands.filter(c => c.args[0] === 'python' && c.args[1] === 'install').length, 0);
+  // Must create venv with system site packages
+  assert.ok(commands.some(c => c.args[0] === 'venv' && c.args.includes('--system-site-packages') && c.args.includes(fakeSysPy)));
+  // Must sync with detected system python
+  assert.ok(commands.some(c => c.args[0] === 'sync' && c.args.includes(fakeSysPy)));
+  // Runtime reflects system Python
+  assert.match(backend.status().runtime, /system-python/);
+
+  await backend.stop();
 });
