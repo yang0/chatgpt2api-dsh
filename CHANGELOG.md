@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.1
+
+稳健性版本，针对「插件已显示就绪、生图却报『号池后端未返回有效 JSON』」这类仅在生产环境暴露的问题：
+
+- **运行时就绪判定不再只看标记文件**：原先只检查 `.dsh-runtime-ready` 与 `python.exe` 存在，`site-packages` 被清空（中断的 uv 操作、杀软、手动清理）也会被当成就绪，后端于是带着残缺环境运行——健康检查正常，第一次懒加载 `anyio` 就 500。现在会校验虚拟环境、`site-packages` 与 `anyio/fastapi/uvicorn/starlette`，不达标即就地 `uv sync` 修复，修完再复查。
+- **损坏环境就地修复而非重装**：保留原有解释器，只补依赖，避免重新下载 Python。
+- **默认优先系统 Python 3.13**：`py -3.13` → Windows 注册表登记的安装 → `python3.13` → PATH 候选 → uv 发现 → 自带运行时。**排除其他工具虚拟环境里的解释器**（Windows 上 `python` 常常是别的应用的 venv，随时可能被删）；依赖仍装在隔离 venv 中，绝不隐式继承全局包。需要复用全局包时设 `DSH_CHATGPT2API_SYSTEM_SITE_PACKAGES=1`。
+- **接管已运行的后端**：端口被上次崩溃残留的正常后端占用时，先用内部密钥验证 `/api/accounts` 再接管，不再报「端口不可用」；若不是自己的服务，给出可操作的提示（关闭它或设 `DSH_CHATGPT2API_PORT`）。
+- **后端意外退出自动重启**：最多 3 次，退避 2s/5s/15s；稳定运行 30 秒后才恢复重启额度，避免崩溃循环无限重试。用尽后给出明确错误与日志路径。
+- **错误信息不再吞掉真相**：后端返回非 JSON 时，报错带上 HTTP 状态、Content-Type 与响应片段（对内部密钥与 `sk-` 令牌脱敏）。
+- **新增排查命令**：`npm run check`（检查运行环境）、`npm run repair`（就地修复，不启动服务）、`npm run diagnose`（日志尾部）。
+
 ## 未发布
 
 - **新增账号自动换取 Token 并直接入池功能**：原生支持 `邮箱----密码----2FA密钥` 账号格式，集成 OpenAI Platform OAuth + PKCE + TOTP 2FA 认证工作进程（`scripts/auth-worker.py`），自动登录换取 `access_token`、`refresh_token` 与 `id_token`，并实时注册至本机号池服务（`/api/accounts`）生效。

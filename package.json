@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-chatgpt2api",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "type": "module",
   "private": true,
   "description": "Cross-platform DSH standalone account pool and local OpenAI-compatible image/text API; no Docker",
@@ -42,6 +42,8 @@
     "build": "node scripts/build.mjs",
     "test": "node --test tests/*.test.mjs",
     "status": "node scripts/manage-backend.mjs status",
+    "check": "node scripts/manage-backend.mjs check",
+    "repair": "node scripts/manage-backend.mjs repair",
     "diagnose": "node scripts/manage-backend.mjs log"
   },
   "license": "MIT",

@@ -2,7 +2,7 @@
 
 在你的电脑上跑一个本地号池，并对外提供 OpenAI 兼容接口。DSH 里的其他插件、Cherry Studio 等本机软件都能直接调用，也能直接用来生图。
 
-内置 Python 运行环境，**不用 Docker、不用自己装 Python、不用单独部署 chatgpt2api**。
+内置 Python 运行环境，**不用 Docker、不用自己装 Python、不用单独部署 chatgpt2api**。电脑里已经有 Python 3.13 时直接复用，没有才下载自带的轻量运行时。
 
 ![插件总览](docs/images/overview.png)
 
@@ -14,7 +14,7 @@
 
 装好之后重启 DSH，左侧插件栏里就会出现 **ChatGPT2API**，点开即可使用。
 
-第一次打开会自动下载 Python 运行环境（几百 MB，请保持联网），等顶部显示「号池运行中」就绪了。之后每次启动都是秒开。
+第一次打开会先找系统里的 Python 3.13：找到就直接用它建隔离环境（几秒），找不到才下载自带运行时（几百 MB，请保持联网）。等顶部显示「号池运行中」就绪了，之后每次启动都是秒开。
 
 ## 第一步：直接导入账号
 
@@ -65,6 +65,21 @@
 
 **数据存在哪里？**
 都在你的用户目录下（Windows：`%USERPROFILE%\.dsh\chatgpt2api-native\`；macOS/Linux：`~/.dsh/chatgpt2api-native/`）。升级或重装前备份这个目录即可。
+
+**后端挂了或一直「未就绪」怎么办？**
+正常情况下插件会自己处理：进程意外退出会自动重启（最多 3 次）；上次 DSH 崩溃残留的后端会被直接接管；Python 依赖被清理或杀软删掉时会自动重装依赖。仍然异常时，在插件仓库目录执行：
+
+```bash
+npm run check    # 检查解释器、site-packages 与关键依赖是否齐全
+npm run repair   # 就地修复运行环境（不启动服务）
+npm run diagnose # 查看后端日志尾部
+```
+
+**系统 Python 相关**
+- 插件要求 **Python 3.13**（后端锁文件 `requires-python >= 3.13`）；3.12 及更早不会被选中。
+- 优先顺序：Windows 的 `py -3.13` / 注册表登记的安装 → `python3.13` → 其他 PATH 候选 → uv 找到的解释器 → 自带运行时。**跑在其他工具虚拟环境里的 Python 不会被选中**，避免绑到别人随时会删的环境。
+- 想指定解释器：设置 `DSH_CHATGPT2API_PYTHON` 指向具体 `python.exe`。
+- 依赖默认装在隔离 venv 里；确实需要复用全局包（例如全局 CUDA 轮子）时设 `DSH_CHATGPT2API_SYSTEM_SITE_PACKAGES=1`。
 
 ## 安全与合规
 

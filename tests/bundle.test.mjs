@@ -6,7 +6,7 @@ import vm from 'node:vm';
 const root=path.resolve(import.meta.dirname,'..');
 test('independent DSH client/host bundle manifests native service',()=>{
   const pkg=JSON.parse(fs.readFileSync(path.join(root,'package.json'),'utf8'));
-  assert.equal(pkg.name,'dsh-plugin-chatgpt2api');assert.equal(pkg.version,'0.6.0');
+  assert.equal(pkg.name,'dsh-plugin-chatgpt2api');assert.equal(pkg.version,'0.6.1');
   assert.equal(pkg.dsh.client.platform,'web');assert.equal(pkg.dsh.bundle.patch,'./cordis.patch.yml');
   const patch=fs.readFileSync(path.join(root,'cordis.patch.yml'),'utf8');
   assert.match(patch,/id: chatgpt2api-native/);assert.match(patch,/port: 38650/);

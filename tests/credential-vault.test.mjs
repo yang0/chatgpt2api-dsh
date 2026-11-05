@@ -39,6 +39,17 @@ test('support 4-field format with email----password----2fa----accessToken',()=>{
   assert.equal(v.accounts[0].auxiliary, 'D4TUEVOINBC7YHLFMQIS5GLTLY74MAX3');
   assert.equal(v.accounts[0].accessToken, 'eyJhbGciOiJSUzI1NiJ9.eyJleHAiOjE4MDAwMDAwMDB9.signature');
 });
+test('support 4-field format with email----password----2fa----mailUrl',()=>{
+  const sampleMail = 'yarrow.89.commons@icloud.com----@8PL3X4nXpXTmeN%----T7MXFNYRY5JZZYL2NNGGRLV6KTO3CQYX----https://mail.bsf94666.store/m/YM-G4NK-2KBP-MVKS-6LVZ-WFA9-WGUC';
+  const v = parseCredentialLines(sampleMail);
+  assert.equal(v.accounts.length, 1);
+  assert.equal(v.errors.length, 0);
+  assert.equal(v.accounts[0].email, 'yarrow.89.commons@icloud.com');
+  assert.equal(v.accounts[0].password, '@8PL3X4nXpXTmeN%');
+  assert.equal(v.accounts[0].auxiliary, 'T7MXFNYRY5JZZYL2NNGGRLV6KTO3CQYX');
+  assert.equal(v.accounts[0].mailUrl, 'https://mail.bsf94666.store/m/YM-G4NK-2KBP-MVKS-6LVZ-WFA9-WGUC');
+  assert.equal(v.accounts[0].accessToken, undefined);
+});
 test('reject malformed rows by number, never include secrets in error messages',()=>{
   const bad='bademail----secret----ABCDEFG\nuser@example.invalid----secret\nuser@example.invalid----secret----ok';
   const v=parseCredentialLines(bad);

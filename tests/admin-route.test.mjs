@@ -310,3 +310,27 @@ test('authenticate route deduplicates identical accounts in input text and corre
   assert.equal(authTargets[0].email, 'repeat@example.com');
   assert.equal(registered.accounts.length, 1);
 });
+
+test('a non-JSON backend reply reports status and a redacted body snippet', async () => {
+  // uvicorn answers an unhandled ASGI exception with plain text. Reporting only
+  // "not valid JSON" hides both the status and the real cause from the user.
+  const plainTextFetcher = async () => ({
+    status: 500,
+    ok: false,
+    headers: {get: name => (name === 'content-type' ? 'text/plain; charset=utf-8' : null)},
+    text: async () => `Internal Server Error: No module named 'anyio._backends' ${SECRET} sk-abcdef123456`
+  });
+  const handler = createAdminHandler({baseUrl: 'http://127.0.0.1:38650', secret: SECRET, fetcher: plainTextFetcher});
+  const res = await handler.route(new Request('http://localhost/api/chatgpt2api-native/manage', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({path: '/health?format=json'})
+  }));
+  assert.equal(res.status, 502);
+  const body = await res.json();
+  assert.match(body.error, /HTTP 500/);
+  assert.match(body.error, /text\/plain/);
+  assert.match(body.error, /anyio\._backends/);
+  assert.doesNotMatch(body.error, new RegExp(SECRET));
+  assert.doesNotMatch(body.error, /sk-abcdef123456/);
+});

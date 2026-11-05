@@ -572,7 +572,7 @@ function createChatGPT2APIDashboard(React, STYLES) {
             h('div',null,h('div',{className:'c2a-kicker'},h('span',{className:'c2a-dot '+(ready?'on':'')},'●'),'跨平台 内置 Python 运行时 / 独立 API 服务'),
               h('h1',null,online?'本机号池 API 已就绪':'首次启动正在安装 Python 后端，或服务尚未就绪'),
               h('p',null,online?'为 DSH 其他插件和本机第三方客户端提供独立的 OpenAI 兼容接口。':'无需 Docker 或单独安装 Python。首次使用会联网下载固定版本的运行环境及后端源码。'),
-              h('div',{className:'c2a-hero-actions'},h(Btn,{primary:true,onClick:()=>setTab('accounts')},'进入号池管理 →'),h(Btn,{onClick:()=>setTab('image')},'测试单张生图'))
+              h('div',{className:'c2a-hero-actions'},h(Btn,{primary:true,onClick:()=>setTab('accounts')},'进入号池管理（账号导入） →'),h(Btn,{onClick:()=>setTab('image')},'测试单张生图'))
             ),h('div',{className:'c2a-hero-art'},h('span',{className:'c2a-orbit one'},''),h('span',{className:'c2a-orbit two'},''),h('span',{className:'c2a-hero-glyph'},'✦'))
           ),
           health.error?h('div',{className:'c2a-alert'},h('b',null,'当前连接问题：'),health.error,'。首次初始化需要联网下载 Python 和依赖，请检查 DSH 日志；也可以运行插件自检命令。'):null,
@@ -589,10 +589,10 @@ function createChatGPT2APIDashboard(React, STYLES) {
                 )
               )
             ),
-            h(Btn,{primary:true,onClick:()=>setTab('accounts')},'前往号池导入 →')
+            h(Btn,{primary:true,onClick:()=>setTab('accounts')},'前往账号导入（支持 TXT/邮箱格式） →')
           ),
           h('div',{className:'c2a-columns'},
-            h(Card,{title:'快捷操作'},h('div',{className:'c2a-quick'},...[["accounts","账号池管理","批量导入邮箱格式、管理 Token 账号","◉"],["api","API 接入","第三方客户端连接、独立调用密钥","⇄"],["image","图片生成","文生图或最多四张参考图","▧"],["advanced","高级账号导入","JSON / CPA / sub2api","⚙"],["settings","插件运行设置","环境检查、运行时排障","≡"]].map(([id,n,desc,icon])=>h('button',{key:id,type:'button',className:'c2a-quicklink',onClick:()=>setTab(id)},h('span',{className:'c2a-quickicon'},icon),h('span',null,h('strong',null,n),h('small',null,desc)),h('span',{className:'c2a-arrow'},'›'))))),
+            h(Card,{title:'快捷操作'},h('div',{className:'c2a-quick'},...[["accounts","账号池与导入","批量导入邮箱/TXT文件、管理 Token 账号","◉"],["api","API 接入","第三方客户端连接、独立调用密钥","⇄"],["image","图片生成","文生图或最多四张参考图","▧"],["advanced","高级账号导入","JSON / CPA / sub2api","⚙"],["settings","插件运行设置","环境检查、运行时排障","≡"]].map(([id,n,desc,icon])=>h('button',{key:id,type:'button',className:'c2a-quicklink',onClick:()=>setTab(id)},h('span',{className:'c2a-quickicon'},icon),h('span',null,h('strong',null,n),h('small',null,desc)),h('span',{className:'c2a-arrow'},'›'))))),
             h(Card,{title:'集成说明'},h('div',{className:'c2a-checks'},
               h('div',null,h('span',null,'插件内置 Python 后端'),h(Chip,{kind:online?'success':'warning'},online?'已连接':'未连接')),
               h('div',null,h('span',null,'DSH Host 服务名称'),h('code',null,'ctx.chatgpt2api')),
@@ -620,9 +620,37 @@ function createChatGPT2APIDashboard(React, STYLES) {
                 h('a',{href:'https://priceai.cc/',target:'_blank',rel:'noopener noreferrer',style:{color:'#2257d4',fontWeight:'600',textDecoration:'underline'}},'https://priceai.cc/'),
                 ' 买几分钱的普号（一般 5 毛钱可以买 10 个）。购买提取后直接粘贴在下方文本框，点击「导入并授权入池」即可。'
               ),
-              h('p',{className:'c2a-help'},'每行格式：邮箱---密码---2FA密钥（支持 3 或 4 个连字符分隔）。点击「导入并授权入池」会自动通过 OAuth + TOTP 登录并换取 Token 加入号池；也可点击「仅加密暂存」保存到本地待授权区。支持粘贴或选择 UTF-8 TXT 文件。'),
-              h('input',{type:'file',accept:'.txt,text/plain', 'aria-label':'导入账号文本文件',onChange:e=>{void loadCredentialFile(e.target.files?.[0]);e.target.value=''}}),
-              h('textarea',{className:'c2a-textarea',value:credentialText,onChange:e=>{setCredentialText(e.target.value);setCredentialFeedback(null)},placeholder:'user@example.com---your-password---2fa-secret\nsecond@example.com----your-password----2fa-secret',rows:5,spellCheck:false,autoComplete:'off','aria-label':'一行一条账号凭据文本'}),
+              h('div',{className:'c2a-format-guide',style:{background:'#f8fafd',border:'1px solid #dbe6f5',borderRadius:'10px',padding:'13px 16px',margin:'10px 0 14px',fontSize:'12px',lineHeight:'1.6'}},
+                h('div',{style:{fontWeight:'700',color:'#1e3a68',marginBottom:'6px'}},
+                  '📋 支持导入的账号格式规范（每行一条，分隔符支持 ---- 或 ---）：'
+                ),
+                h('div',{style:{display:'grid',gap:'8px',color:'#3d5375'}},
+                  h('div',null,
+                    h('span',{style:{background:'#e6efff',color:'#1c4bb5',padding:'2px 6px',borderRadius:'4px',fontWeight:'600',marginRight:'8px'}},'格式 1 标准三字段'),
+                    h('code',{style:{background:'#edf2f9',padding:'2px 5px',borderRadius:'4px',fontFamily:'monospace'}},'邮箱----密码----2FA密钥'),
+                    h('span',{style:{color:'#6b7c96',marginLeft:'8px'}},'（自动通过 OAuth + TOTP 登录换取 Token 加入号池）')
+                  ),
+                  h('div',null,
+                    h('span',{style:{background:'#e6efff',color:'#1c4bb5',padding:'2px 6px',borderRadius:'4px',fontWeight:'600',marginRight:'8px'}},'格式 2 卡密带邮箱链接'),
+                    h('code',{style:{background:'#edf2f9',padding:'2px 5px',borderRadius:'4px',fontFamily:'monospace'}},'邮箱----密码----2FA密钥----https://mail.xxx.store/...'),
+                    h('span',{style:{color:'#6b7c96',marginLeft:'8px'}},'（第四字段为网页邮箱/接码链接，系统自动识别并使用前三项自动登录）')
+                  ),
+                  h('div',null,
+                    h('span',{style:{background:'#e6efff',color:'#1c4bb5',padding:'2px 6px',borderRadius:'4px',fontWeight:'600',marginRight:'8px'}},'格式 3 带已生成 Token'),
+                    h('code',{style:{background:'#edf2f9',padding:'2px 5px',borderRadius:'4px',fontFamily:'monospace'}},'邮箱----密码----2FA密钥----eyJhbGci...'),
+                    h('span',{style:{color:'#6b7c96',marginLeft:'8px'}},'（第四字段为有效 access_token 时优先直接复用入池，过期会自动重新登录）')
+                  ),
+                  h('div',null,
+                    h('span',{style:{background:'#f0f3f8',color:'#55657d',padding:'2px 6px',borderRadius:'4px',fontWeight:'600',marginRight:'8px'}},'文本文件导入'),
+                    '点击下方「选择账号文本文件（.txt）」可直接选择包含上述格式的本地 txt 文件，自动加载入框。'
+                  )
+                )
+              ),
+              h('div',{style:{margin:'10px 0 8px'}},
+                h('label',{style:{display:'block',fontWeight:'600',fontSize:'12px',color:'#385680',marginBottom:'5px'}},'📁 选择账号文本文件（.txt）：'),
+                h('input',{type:'file',accept:'.txt,text/plain', 'aria-label':'导入账号文本文件',onChange:e=>{void loadCredentialFile(e.target.files?.[0]);e.target.value=''}})
+              ),
+              h('textarea',{className:'c2a-textarea',value:credentialText,onChange:e=>{setCredentialText(e.target.value);setCredentialFeedback(null)},placeholder:'yarrow.89.commons@icloud.com----@8PL3X4nXpXTmeN%----T7MXFNYRY5JZZYL2NNGGRLV6KTO3CQYX----https://mail.bsf94666.store/...\nsecond@example.com----your-password----2fa-secret',rows:5,spellCheck:false,autoComplete:'off','aria-label':'一行一条账号凭据文本'}),
               h('div',{className:'c2a-formrow'},
                 h(Btn,{primary:true,onClick:importAndAuthenticate,disabled:credentialBusy||!credentialText.trim()},credentialBusy?'正在登录并换取 Token…':'导入并授权入池'),
                 h(Btn,{onClick:importCredentialLines,disabled:credentialBusy||!credentialText.trim()},'仅加密暂存'),
@@ -813,6 +841,13 @@ function createChatGPT2APIDashboard(React, STYLES) {
         ):
         tab==='advanced'?h('div',{className:'c2a-workspace'},
           h('div',{className:'c2a-sectiontitle'},h('div',null,h('h2',null,'高级账号导入'),h('p',null,'使用本插件原生界面管理账号来源；不依赖原项目 Next.js 网页或额外部署。')),h(Btn,{onClick:refreshPools,disabled:advancedBusy},advancedBusy?'处理中…':'刷新连接')),
+          h('div',{className:'c2a-info',style:{margin:'0 0 12px 0',display:'flex',justifyContent:'space-between',alignItems:'center',gap:'12px',flexWrap:'wrap'}},
+            h('div',null,
+              h('strong',null,'💡 想导入「邮箱---密码---2FA」文本或选择 .txt 文件？'),
+              h('p',{style:{margin:'4px 0 0',color:'#42659e',fontSize:'12px'}},'当前页面为 CPA / sub2api / JSON 格式的高级导入；常规账号批量导入及 TXT 文件选择请前往「号池管理 / 导入」页面。')
+            ),
+            h(Btn,{primary:true,onClick:()=>setTab('accounts')},'前往账号导入（支持 TXT） →')
+          ),
           advancedError?h('div',{className:'c2a-alert'},advancedError):null,
           importMessage?h('div',{className:'c2a-info'},importMessage):null,
           h(Card,{title:'导入 CPA / OAuth JSON 文件'},
