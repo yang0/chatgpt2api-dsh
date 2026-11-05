@@ -55,6 +55,18 @@ except ImportError:
     config = None
 
 
+def parse_jwt_payload(t: str) -> dict:
+    """Safely decode JWT payload JSON without signature verification."""
+    try:
+        parts = str(t or "").split(".")
+        if len(parts) != 3:
+            return {}
+        padded = parts[1] + "=" * ((4 - len(parts[1]) % 4) % 4)
+        return json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
+    except Exception:
+        return {}
+
+
 def get_totp(secret: str) -> str:
     """Calculate current 6-digit TOTP code from Base32 secret."""
     secret = secret.replace(" ", "").upper()
@@ -315,19 +327,24 @@ def login_with_password_and_totp(email: str, password: str, totp_secret: str = "
     }
 
 
-def parse_credentials(raw_text: str) -> list[tuple[str, str, str]]:
-    """Parse email----password----2FA lines."""
+def parse_credentials(raw_text: str) -> list[tuple[str, str, str, str]]:
+    """Parse email----password----2FA[----token] lines."""
     accounts = []
     for line in raw_text.strip().splitlines():
         line = line.strip()
         if not line or line.startswith("#") or line.startswith("==="):
             continue
         parts = [p.strip() for p in line.split("----")]
-        if len(parts) >= 3:
+        if len(parts) < 3:
+            parts = [p.strip() for p in line.split("---")]
+        if len(parts) >= 4:
+            email, pwd, totp, tok = parts[0], parts[1], parts[2], parts[3]
+            accounts.append((email, pwd, totp, tok))
+        elif len(parts) >= 3:
             email, pwd, totp = parts[0], parts[1], parts[2]
-            accounts.append((email, pwd, totp))
+            accounts.append((email, pwd, totp, ""))
         elif len(parts) == 2:
-            accounts.append((parts[0], parts[1], ""))
+            accounts.append((parts[0], parts[1], "", ""))
     return accounts
 
 
@@ -366,7 +383,9 @@ def main():
                                 "id": acc_id,
                                 "email": email,
                                 "password": password,
-                                "totp_secret": totp
+                                "totp_secret": totp,
+                                "access_token": str(item.get("access_token") or item.get("token") or "").strip(),
+                                "refresh_token": str(item.get("refresh_token") or "").strip(),
                             })
     except Exception:
         is_json = False
@@ -374,12 +393,14 @@ def main():
     # If not JSON, parse lines
     if not is_json:
         parsed_lines = parse_credentials(raw_input)
-        for email, pwd, totp in parsed_lines:
+        for acc_tuple in parsed_lines:
             accounts_to_auth.append({
                 "id": "",
-                "email": email,
-                "password": pwd,
-                "totp_secret": totp
+                "email": acc_tuple[0],
+                "password": acc_tuple[1],
+                "totp_secret": acc_tuple[2] if len(acc_tuple) > 2 else "",
+                "access_token": acc_tuple[3] if len(acc_tuple) > 3 else "",
+                "refresh_token": "",
             })
 
     if not accounts_to_auth:
@@ -399,40 +420,70 @@ def main():
         password = acc["password"]
         totp = acc["totp_secret"]
         acc_id = acc.get("id") or ""
+        given_token = str(acc.get("access_token") or "").strip()
+        given_refresh = str(acc.get("refresh_token") or "").strip()
 
-        res = login_with_password_and_totp(email, password, totp, proxy=custom_proxy)
-        if res.get("ok"):
-            access_token = res["access_token"]
-            refresh_token = res.get("refresh_token") or ""
-            id_token = res.get("id_token") or ""
-            results.append({
-                "id": acc_id,
-                "email": email,
-                "ok": True,
-                "access_token": access_token,
-                "refresh_token": refresh_token,
-                "id_token": id_token,
-                "expires_in": res.get("expires_in")
-            })
-            enrolled_items.append({
-                "email": email,
-                "password": password,
-                "totp_secret": totp,
-                "access_token": access_token,
-                "refresh_token": refresh_token,
-                "id_token": id_token,
-                "source_type": "oauth_password_2fa",
-                "type": "oauth"
-            })
-            enrolled_tokens.append(access_token)
-        else:
-            results.append({
-                "id": acc_id,
-                "email": email,
-                "ok": False,
-                "error": res.get("error") or "login_failed",
-                "detail": str(res.get("detail") or "")[:200]
-            })
+        valid_cached = False
+        if given_token:
+            payload = parse_jwt_payload(given_token)
+            exp = payload.get("exp")
+            if exp and isinstance(exp, (int, float)) and exp > time.time() + 60:
+                valid_cached = True
+                results.append({
+                    "id": acc_id,
+                    "email": email,
+                    "ok": True,
+                    "access_token": given_token,
+                    "refresh_token": given_refresh,
+                    "id_token": "",
+                    "expires_in": max(0, int(exp - time.time()))
+                })
+                enrolled_items.append({
+                    "email": email,
+                    "password": password,
+                    "totp_secret": totp,
+                    "access_token": given_token,
+                    "refresh_token": given_refresh,
+                    "id_token": "",
+                    "source_type": "oauth_password_2fa",
+                    "type": "oauth"
+                })
+                enrolled_tokens.append(given_token)
+
+        if not valid_cached:
+            res = login_with_password_and_totp(email, password, totp, proxy=custom_proxy)
+            if res.get("ok"):
+                access_token = res["access_token"]
+                refresh_token = res.get("refresh_token") or given_refresh or ""
+                id_token = res.get("id_token") or ""
+                results.append({
+                    "id": acc_id,
+                    "email": email,
+                    "ok": True,
+                    "access_token": access_token,
+                    "refresh_token": refresh_token,
+                    "id_token": id_token,
+                    "expires_in": res.get("expires_in")
+                })
+                enrolled_items.append({
+                    "email": email,
+                    "password": password,
+                    "totp_secret": totp,
+                    "access_token": access_token,
+                    "refresh_token": refresh_token,
+                    "id_token": id_token,
+                    "source_type": "oauth_password_2fa",
+                    "type": "oauth"
+                })
+                enrolled_tokens.append(access_token)
+            else:
+                results.append({
+                    "id": acc_id,
+                    "email": email,
+                    "ok": False,
+                    "error": res.get("error") or "login_failed",
+                    "detail": str(res.get("detail") or "")[:200]
+                })
 
     # Optional auto-enroll via API URL
     enroll_summary = None

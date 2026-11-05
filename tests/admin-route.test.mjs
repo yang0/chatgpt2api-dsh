@@ -216,10 +216,31 @@ test('opening the local image history folder only accepts the fixed Host path', 
     assert.equal(ok.status, 200);
     assert.equal(ok.body.opened, true);
     assert.equal(ok.body.count, 1);
+    assert.equal(ok.body.dir, path.resolve(dir));
     assert.equal(opened, path.resolve(dir));
 
+    // GET only reports the copyable path, never launches anything.
     const get = await exec({path: '/local/open-images-dir', method: 'GET'});
-    assert.equal(get.status, 405);
+    assert.equal(get.status, 200);
+    assert.equal(get.body.dir, path.resolve(dir));
+    assert.equal(get.body.count, 1);
+    assert.equal(get.body.opened, false);
+
+    // A failed launch still returns the path so the UI can offer copy/paste.
+    let launchError = null;
+    const failing = createAdminHandler({
+      baseUrl: 'http://127.0.0.1:38650',
+      secret: SECRET,
+      fetcher,
+      imagesDir: dir,
+      openFolder: async () => { throw new Error('opener exploded'); },
+    });
+    const failRes = await failing.route(new Request('http://localhost/api/chatgpt2api-native/manage', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({path: '/local/open-images-dir', method: 'POST'})}));
+    launchError = await failRes.json();
+    assert.equal(failRes.status, 200);
+    assert.equal(launchError.opened, false);
+    assert.equal(launchError.dir, path.resolve(dir));
+    assert.match(launchError.error, /opener exploded/);
 
     const external = createAdminHandler({baseUrl: 'http://127.0.0.1:38650', secret: SECRET, fetcher});
     const res = await external.route(new Request('http://localhost/api/chatgpt2api-native/manage', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({path: '/local/open-images-dir', method: 'POST'})}));

@@ -177,6 +177,7 @@ function createChatGPT2APIDashboard(React, STYLES) {
     const [imageResult,setImageResult]=usePanelState('imageResult',{loading:false,url:'',error:''});
     const [folderBusy,setFolderBusy]=usePanelState('folderBusy',false);
     const [folderNote,setFolderNote]=usePanelState('folderNote','');
+    const [folderInfo,setFolderInfo]=usePanelState('folderInfo',{dir:'',count:0});
     const [frameIndex,setFrameIndex]=useState(0);
     const [userKeys,setUserKeys]=usePanelState('userKeys',[]);
     const [userKeysLoaded,setUserKeysLoaded]=usePanelState('userKeysLoaded',false);
@@ -276,6 +277,7 @@ function createChatGPT2APIDashboard(React, STYLES) {
       if(tab==='accounts'){void listAccounts({silent:pool.loaded});void listCredentials();}
       else if(tab==='api')void loadUserKeys({silent:userKeysLoaded});
       else if(tab==='advanced')void refreshPools({silent:poolsLoaded});
+      else if(tab==='image')void loadImagesFolder();
     },[tab]);
     function copyWithFeedback(text, id){
       copyToClipboard(text, ()=>{
@@ -536,15 +538,24 @@ function createChatGPT2APIDashboard(React, STYLES) {
       }catch(e){setImageResult({loading:false,url:'',error:ctrl.signal.aborted?'生成等待超时':imageFailureText(shortError(e))})}
       finally{clearTimeout(timer)}
     }
+    async function loadImagesFolder(){
+      try{
+        const r=await upstream('/local/open-images-dir',{method:'GET',timeoutMs:10000});
+        setFolderInfo({dir:String(r?.dir||''),count:Number(r?.count||0)});
+      }catch{/* Host older than this panel: the path stays hidden until a restart. */}
+    }
     async function openImagesFolder(){
       setFolderBusy(true);setFolderNote('');
       try{
         const r=await upstream('/local/open-images-dir',{method:'POST',timeoutMs:15000});
-        setFolderNote(`已在本机文件管理器中打开历史图片文件夹${Number.isFinite(Number(r?.count))?`（当前 ${Number(r.count)} 张）`:''}。`);
+        setFolderInfo({dir:String(r?.dir||''),count:Number(r?.count||0)});
+        setFolderNote(r?.opened
+          ?`已请求在文件管理器中打开（当前 ${Number(r?.count)||0} 张图片）。如果没看到窗口，可能被当前窗口挡住或在任务栏；也可以直接复制下面的地址打开。`
+          :`无法自动打开：${r?.error||'系统没有可用的文件管理器'}。请复制下面的地址，在资源管理器/访达中粘贴打开。`);
       }catch(e){
         const raw=shortError(e);
         setFolderNote(/未授权|404/.test(raw)
-          ?'当前 DSH 仍在运行旧版插件 Host，重启 DSH 后即可使用“打开历史图片文件夹”。'
+          ?'当前 DSH 仍在运行旧版插件 Host，重启 DSH 后即可显示目录地址。'
           :'打开失败：'+raw);
       }finally{setFolderBusy(false)}
     }
@@ -574,7 +585,7 @@ function createChatGPT2APIDashboard(React, STYLES) {
                 h('span',{style:{color:'#385680',fontSize:'12px'}},
                   '无需高价号，可以上 ',
                   h('a',{href:'https://priceai.cc/',target:'_blank',rel:'noopener noreferrer',style:{color:'#2459e1',fontWeight:'600',textDecoration:'underline'}},'https://priceai.cc/'),
-                  ' 买几分钱的普号（一般 5 毛钱可以买 10 个）。购买后复制提取文本，在「号池管理」直接按「邮箱----密码----2FA」一键授权入池。'
+                  ' 买几分钱的普号（一般 5 毛钱可以买 10 个）。购买后复制提取文本，在「号池管理」直接按「邮箱---密码---2FA」或「邮箱----密码----2FA」一键授权入池。'
                 )
               )
             ),
@@ -609,9 +620,9 @@ function createChatGPT2APIDashboard(React, STYLES) {
                 h('a',{href:'https://priceai.cc/',target:'_blank',rel:'noopener noreferrer',style:{color:'#2257d4',fontWeight:'600',textDecoration:'underline'}},'https://priceai.cc/'),
                 ' 买几分钱的普号（一般 5 毛钱可以买 10 个）。购买提取后直接粘贴在下方文本框，点击「导入并授权入池」即可。'
               ),
-              h('p',{className:'c2a-help'},'每行格式：邮箱----密码----2FA密钥。点击「导入并授权入池」会自动通过 OAuth + TOTP 登录并换取 Token 加入号池；也可点击「仅加密暂存」保存到本地待授权区。支持粘贴或选择 UTF-8 TXT 文件。'),
+              h('p',{className:'c2a-help'},'每行格式：邮箱---密码---2FA密钥（支持 3 或 4 个连字符分隔）。点击「导入并授权入池」会自动通过 OAuth + TOTP 登录并换取 Token 加入号池；也可点击「仅加密暂存」保存到本地待授权区。支持粘贴或选择 UTF-8 TXT 文件。'),
               h('input',{type:'file',accept:'.txt,text/plain', 'aria-label':'导入账号文本文件',onChange:e=>{void loadCredentialFile(e.target.files?.[0]);e.target.value=''}}),
-              h('textarea',{className:'c2a-textarea',value:credentialText,onChange:e=>{setCredentialText(e.target.value);setCredentialFeedback(null)},placeholder:'user@example.com----your-password----2fa-secret\nsecond@example.com----your-password----2fa-secret',rows:5,spellCheck:false,autoComplete:'off','aria-label':'一行一条账号凭据文本'}),
+              h('textarea',{className:'c2a-textarea',value:credentialText,onChange:e=>{setCredentialText(e.target.value);setCredentialFeedback(null)},placeholder:'user@example.com---your-password---2fa-secret\nsecond@example.com----your-password----2fa-secret',rows:5,spellCheck:false,autoComplete:'off','aria-label':'一行一条账号凭据文本'}),
               h('div',{className:'c2a-formrow'},
                 h(Btn,{primary:true,onClick:importAndAuthenticate,disabled:credentialBusy||!credentialText.trim()},credentialBusy?'正在登录并换取 Token…':'导入并授权入池'),
                 h(Btn,{onClick:importCredentialLines,disabled:credentialBusy||!credentialText.trim()},'仅加密暂存'),
@@ -784,7 +795,11 @@ function createChatGPT2APIDashboard(React, STYLES) {
                 h(Btn,{onClick:openImagesFolder,disabled:folderBusy,title:'在本机文件管理器中打开后端按日期保存历史图片的目录'},folderBusy?'正在打开…':'打开历史图片文件夹')
               ),
               folderNote?h('p',{className:'c2a-help'},folderNote):null,
-              h('p',{className:'c2a-help'},'成功后图片会自动按 年/月/日 保存在本机后端数据目录，方便以后翻看。')
+              folderInfo.dir?h('div',{className:'c2a-formrow',style:{alignItems:'stretch'}},
+                h('code',{className:'c2a-code',style:{flex:1,minWidth:0,margin:0,padding:'10px 12px',fontSize:'11px',whiteSpace:'pre-wrap',wordBreak:'break-all'}},folderInfo.dir),
+                h(Btn,{cls:copiedId==='folder-path'?'copied':'',onClick:()=>copyWithFeedback(folderInfo.dir,'folder-path'),title:'复制完整文件夹地址'},copiedId==='folder-path'?'✓ 已复制':'复制地址')
+              ):null,
+              h('p',{className:'c2a-help'},'成功后图片会自动按 年/月/日 保存在本机后端数据目录；如果系统没有弹出文件管理器，直接复制上面的地址粘贴到资源管理器/访达即可。')
             ),
             h(Card,{title:'生成结果'},
               imageResult.error?h('div',{className:'c2a-alert'},imageResult.error):null,

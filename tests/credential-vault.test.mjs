@@ -14,6 +14,31 @@ test('parse one email----password----auxiliary record per line, preserve punctua
   assert.equal(v.accounts.length,2);assert.equal(v.errors.length,0);
   assert.equal(v.accounts[0].password,'pA#1&2*3');assert.equal(v.accounts[1].auxiliary,'XYZ234ABCDE99999');
 });
+test('support 3-dash separator (---) and email containing hyphens',()=>{
+  const sample3 = [
+    'gelatin-43-rights+9m8htp@icloud.com---26zvXE4N6E@#---2VANTOFVYQPHTSMTN6KMA6IIRYPSVTXS',
+    'knitted.gloat-7t+xg81j8@icloud.com---95c!2BP4GkFH---Y2PFHOJ4BFKE6ENH474X4Q3XWV6TAG7E'
+  ].join('\n');
+  const v = parseCredentialLines(sample3);
+  assert.equal(v.accounts.length, 2);
+  assert.equal(v.errors.length, 0);
+  assert.equal(v.accounts[0].email, 'gelatin-43-rights+9m8htp@icloud.com');
+  assert.equal(v.accounts[0].password, '26zvXE4N6E@#');
+  assert.equal(v.accounts[0].auxiliary, '2VANTOFVYQPHTSMTN6KMA6IIRYPSVTXS');
+  assert.equal(v.accounts[1].email, 'knitted.gloat-7t+xg81j8@icloud.com');
+  assert.equal(v.accounts[1].password, '95c!2BP4GkFH');
+  assert.equal(v.accounts[1].auxiliary, 'Y2PFHOJ4BFKE6ENH474X4Q3XWV6TAG7E');
+});
+test('support 4-field format with email----password----2fa----accessToken',()=>{
+  const sample4 = 'entzwyrosdick0770@outlook.com----oW5QPzUou2q#l7eC----D4TUEVOINBC7YHLFMQIS5GLTLY74MAX3----eyJhbGciOiJSUzI1NiJ9.eyJleHAiOjE4MDAwMDAwMDB9.signature';
+  const v = parseCredentialLines(sample4);
+  assert.equal(v.accounts.length, 1);
+  assert.equal(v.errors.length, 0);
+  assert.equal(v.accounts[0].email, 'entzwyrosdick0770@outlook.com');
+  assert.equal(v.accounts[0].password, 'oW5QPzUou2q#l7eC');
+  assert.equal(v.accounts[0].auxiliary, 'D4TUEVOINBC7YHLFMQIS5GLTLY74MAX3');
+  assert.equal(v.accounts[0].accessToken, 'eyJhbGciOiJSUzI1NiJ9.eyJleHAiOjE4MDAwMDAwMDB9.signature');
+});
 test('reject malformed rows by number, never include secrets in error messages',()=>{
   const bad='bademail----secret----ABCDEFG\nuser@example.invalid----secret\nuser@example.invalid----secret----ok';
   const v=parseCredentialLines(bad);
