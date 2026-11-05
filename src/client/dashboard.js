@@ -632,7 +632,11 @@ function createChatGPT2APIDashboard(React, STYLES) {
               credentialError?h('div',{className:'c2a-alert'},credentialError):null,
               credentialFeedback?h('div',{className:'c2a-info'},
                 credentialFeedback.succeeded!==undefined?
-                  `完成：成功授权并入池 ${credentialFeedback.succeeded||0} 个账号（新增 ${credentialFeedback.enrolled?.added||0}，刷新 ${credentialFeedback.enrolled?.refreshed||0}）；失败 ${credentialFeedback.failed||0} 个。`:
+                  (
+                    credentialFeedback.total > 0 && credentialFeedback.succeeded === 0 && credentialFeedback.failed === 0 && ((credentialFeedback.poolSkipped||0) + (credentialFeedback.enrolled?.skipped||0) + (credentialFeedback.duplicates||0)) ?
+                      `全部账号（共 ${credentialFeedback.total} 个）均已在号池中（状态正常）或已重复，已自动跳过，无需重复导入。`:
+                      `完成：成功授权并入池 ${credentialFeedback.succeeded||0} 个账号（新增 ${credentialFeedback.enrolled?.added||0}，刷新 ${credentialFeedback.enrolled?.refreshed||0}${((credentialFeedback.poolSkipped||0)+(credentialFeedback.enrolled?.skipped||0)+(credentialFeedback.duplicates||0)) ? `，重复跳过 ${(credentialFeedback.poolSkipped||0)+(credentialFeedback.enrolled?.skipped||0)+(credentialFeedback.duplicates||0)}` : ''}）；失败 ${credentialFeedback.failed||0} 个。`
+                  ):
                   `加密暂存 ${credentialFeedback.added||0} 条；重复跳过 ${credentialFeedback.skipped||0} 条；格式错误 ${credentialFeedback.invalid||0} 行。`,
                 Array.isArray(credentialFeedback.errors)&&credentialFeedback.errors.length?h('ul',null,...credentialFeedback.errors.map((x,i)=>h('li',{key:i},`第 ${x.line} 行：${x.reason}`))):null,
                 Array.isArray(credentialFeedback.failures)&&credentialFeedback.failures.length?h('ul',null,...credentialFeedback.failures.map((x,i)=>h('li',{key:i},`${x.email}：${x.error}`))):null

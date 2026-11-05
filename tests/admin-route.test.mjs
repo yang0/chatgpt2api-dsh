@@ -250,3 +250,63 @@ test('opening the local image history folder only accepts the fixed Host path', 
   }
 });
 
+
+
+test('authenticate route deduplicates identical accounts in input text and correctly aggregates skipped count', async () => {
+  let registered = null;
+  let authTargets = [];
+  const mockFetcher = async (url, opts) => {
+    if (url.endsWith('/api/accounts') && opts.method === 'POST') {
+      registered = JSON.parse(opts.body);
+      return {status: 200, ok: true, headers: {get: () => null}, text: async () => JSON.stringify({added: 1, skipped: 0, refreshed: 0, errors: []})};
+    }
+    return {status: 200, ok: true, headers: {get: () => null}, text: async () => JSON.stringify({})};
+  };
+  const mockAuth = async ({accounts}) => {
+    authTargets = accounts;
+    return {
+      results: accounts.map(a => ({
+        id: a.id,
+        email: a.email,
+        ok: true,
+        access_token: 'secret_token_dup_test',
+        refresh_token: 'rt_secret_dup_test',
+        id_token: 'id_secret_dup_test'
+      }))
+    };
+  };
+  const mockVault = {list: () => ({count: 0, items: []}), getAll: () => [], get: () => null, delete: () => {}, updateStatus: () => {}, importText: () => {}};
+  const handler = createAdminHandler({
+    baseUrl: 'http://127.0.0.1:38650',
+    secret: SECRET,
+    fetcher: mockFetcher,
+    vault: mockVault,
+    authenticator: mockAuth
+  });
+
+  const dupText = [
+    'repeat@example.com----pass1----2FASECRET1',
+    'repeat@example.com----pass2----2FASECRET2'
+  ].join('\n');
+
+  const request = new Request('http://localhost/api/chatgpt2api-native/manage', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      path: '/local/credential-vault/authenticate',
+      method: 'POST',
+      body: {text: dupText}
+    })
+  });
+  const res = await handler.route(request);
+  const data = await res.json();
+
+  assert.equal(data.total, 2);
+  assert.equal(data.duplicates, 1);
+  assert.equal(data.succeeded, 1);
+  assert.equal(data.enrolled.added, 1);
+  assert.equal(data.enrolled.skipped, 1);
+  assert.equal(authTargets.length, 1);
+  assert.equal(authTargets[0].email, 'repeat@example.com');
+  assert.equal(registered.accounts.length, 1);
+});
