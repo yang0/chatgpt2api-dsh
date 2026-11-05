@@ -334,3 +334,64 @@ test('a non-JSON backend reply reports status and a redacted body snippet', asyn
   assert.doesNotMatch(body.error, new RegExp(SECRET));
   assert.doesNotMatch(body.error, /sk-abcdef123456/);
 });
+
+
+test('zero-quota proxy controls do not expose other settings or credentials',async()=>{
+  let savedProxy='';
+  const observed=[];
+  const mock=async (url,opts)=>{
+    const route=new URL(url).pathname;
+    const dataIn=opts.body?JSON.parse(opts.body):null;
+    observed.push({route,method:opts.method,dataIn});
+    let data;
+    if(route==='/api/settings'&&opts.method==='GET')data={config:{proxy:savedProxy,'auth-key':'never-expose',backup:{password:'private'}}};
+    else if(route==='/api/settings'&&opts.method==='POST'){savedProxy=dataIn.proxy;data={config:{proxy:savedProxy,secret:'hidden'}}}
+    else if(route==='/api/proxy/test')data={result:{ok:true,status:200,latency_ms:393,proxy_source:'input',has_proxy:true,error:null,debug_token:TOKEN}};
+    else if(route==='/api/accounts'&&opts.method==='GET')data={items:[{access_token:TOKEN,quota:0,status:'正常',last_refresh_error:'secret '+TOKEN}]};
+    else if(route==='/api/accounts/refresh'&&opts.method==='POST')data={progress_id:'11111111-1111-1111-1111-111111111111'};
+    else if(route==='/api/accounts/refresh/progress/11111111-1111-1111-1111-111111111111')
+      data={done:true,total:1,processed:1,total_quota:27,result:{refreshed:1,errors:[{token:TOKEN,error:'supersecret'}],items:[{access_token:TOKEN}]}};
+    else throw Error('unexpected upstream request '+route);
+    return {ok:true,status:200,headers:{get:()=>null},text:async()=>JSON.stringify(data)};
+  };
+  const handler=createAdminHandler({baseUrl:'http://127.0.0.1:38650',secret:SECRET,fetcher:mock});
+  const original=await handler.execute({path:'/local/proxy'});
+  assert.equal(original.configured,false);
+  const saved=await handler.execute({path:'/local/proxy',method:'POST',body:{url:'http://127.0.0.1:7897'}});
+  assert.equal(saved.url,'http://127.0.0.1:7897');
+  const loaded=await handler.execute({path:'/local/proxy'});
+  assert.equal(loaded.configured,true);
+  assert.doesNotMatch(JSON.stringify(loaded),/never-expose|private/);
+  assert.deepEqual(observed.find(x=>x.route==='/api/settings'&&x.method==='POST').dataIn,{proxy:'http://127.0.0.1:7897'});
+  const tested=await handler.execute({path:'/local/proxy/test',method:'POST',body:{url:'http://127.0.0.1:7897'}});
+  assert.equal(tested.result.status,200);
+  assert.doesNotMatch(JSON.stringify(tested),/debug_token|upstream_access_token/);
+  const accounts=await handler.execute({path:'/api/accounts'});
+  assert.equal(accounts.items[0].quota,0);
+  assert.equal(accounts.items[0].quota_check_failed,true);
+  const refresh=await handler.execute({path:'/local/accounts/refresh-all',method:'POST'});
+  assert.equal(refresh.total,1);
+  assert.deepEqual(observed.find(x=>x.route==='/api/accounts/refresh').dataIn,{access_tokens:[]});
+  const progress=await handler.execute({path:'/api/accounts/refresh/progress/'+refresh.progress_id});
+  assert.deepEqual(progress,{done:true,total:1,processed:1,total_quota:27,errorCount:1,refreshed:1});
+  assert.doesNotMatch(JSON.stringify(progress),/upstream_access_token|supersecret/);
+  for(const invalid of ['file:///tmp/evil','http://name:pass@127.0.0.1:7897','http://127.0.0.1:7897/path','http://127.0.0.1:7897?x=1']){
+    await assert.rejects(()=>handler.execute({path:'/local/proxy',method:'POST',body:{url:invalid}}));
+  }
+  const socks=await handler.execute({path:'/local/proxy',method:'POST',body:{url:'socks5://127.0.0.1:1080'}});
+  assert.equal(socks.url,'socks5://127.0.0.1:1080');
+  await assert.rejects(()=>handler.execute({path:'/api/settings'}));
+  await assert.rejects(()=>handler.execute({path:'/api/accounts/refresh/progress/not-a-uuid'}));
+});
+
+test('proxy URLs with credentials are not returned to the browser',async()=>{
+  const handler=createAdminHandler({
+    baseUrl:'http://127.0.0.1:38650',secret:SECRET,
+    fetcher:async()=>({ok:true,status:200,headers:{get:()=>null},text:async()=>JSON.stringify({config:{proxy:'http://user:password@127.0.0.1:7897'}})})
+  });
+  const proxy=await handler.execute({path:'/local/proxy'});
+  assert.equal(proxy.configured,true);
+  assert.equal(proxy.hasCredentials,true);
+  assert.equal(proxy.url,'');
+  assert.doesNotMatch(JSON.stringify(proxy),/password|user:/);
+});

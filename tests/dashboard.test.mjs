@@ -101,3 +101,21 @@ test('image failures explain upstream content policy instead of echoing the apol
   assert.equal(imageFailureText('连接超时（240 秒）'),'连接超时（240 秒）');
   assert.doesNotMatch(DEFAULT_PROMPT,/写真|真人|性感/);
 });
+
+
+test('zero-quota troubleshooting controls and DeepSeek guidance are present in the account panel',()=>{
+  const ui=loadPanel();
+  let tree=ui.mount();
+  const accounts=ui.find(tree,n=>n.type==='button'&&n.props?.className?.includes('c2a-tab')&&ui.flatten(n).includes('号池管理'));
+  accounts.props.onClick();
+  tree=ui.render();
+  const labels=ui.text(tree);
+  assert.match(labels,/代理与额度排障/);
+  assert.match(labels,/测试代理连通性/);
+  assert.match(labels,/保存全局代理/);
+  assert.match(labels,/全部刷新额度/);
+  assert.match(labels,/复制排查说明给 DeepSeek/);
+  const source=fs.readFileSync(new URL('../src/client/dashboard.js',import.meta.url),'utf8');
+  assert.match(source,/我已经导入了所有的账号，但是剩余额度一直是 0/);
+  assert.match(source,/pool\.items\.every\(/);
+});
