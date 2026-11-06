@@ -949,7 +949,7 @@ function createChatGPT2APIDashboard(React, STYLES) {
               h('label',{className:'c2a-fieldlabel'},'生成模型'),
               h('div',{className:'c2a-formrow'},
                 h('select',{className:'c2a-input',value:imageModel,'aria-label':'生成模型',onChange:e=>setImageModel(e.target.value)},
-                  ...[...new Set([imageModel,...imageModels.items])].filter(Boolean).map(x=>h('option',{key:x,value:x},x))),
+                  ...[...new Set([imageModel,...imageModels.items,...(animatedGif?['gpt-image-2.6','gpt-image-2.6-flare','gpt-image-2.6-sunburst']:[])])].filter(Boolean).map(x=>h('option',{key:x,value:x},x))),
                 h(Btn,{onClick:loadImageModels,disabled:imageModels.loading},imageModels.loading?'刷新中…':'刷新模型')
               ),
               imageModels.error?h('p',{className:'c2a-help'},'模型列表：'+imageModels.error):null,
