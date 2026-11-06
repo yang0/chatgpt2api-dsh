@@ -179,6 +179,10 @@ function createChatGPT2APIDashboard(React, STYLES) {
     const [imagePrefs,setImagePrefs]=usePanelState('imagePrefs',{defaultModel:'gpt-image-2',defaultImageTier:'auto',loaded:false,saving:false,error:'',message:''});
     const [imageModel,setImageModel]=usePanelState('imageModel','gpt-image-2');
     const [imageTier,setImageTier]=usePanelState('imageTier','auto');
+    const [animatedGif,setAnimatedGif]=usePanelState('animatedGif',false);
+    const [gifFrameCount,setGifFrameCount]=usePanelState('gifFrameCount',9);
+    const [gifFrameDuration,setGifFrameDuration]=usePanelState('gifFrameDuration',200);
+    const [gifCapability,setGifCapability]=usePanelState('gifCapability',{enabled:false,loaded:false});
     const [imageFiles,setImageFiles]=usePanelState('imageFiles',[]);
     const [imageResult,setImageResult]=usePanelState('imageResult',{loading:false,url:'',error:''});
     const [folderBusy,setFolderBusy]=usePanelState('folderBusy',false);
@@ -284,7 +288,7 @@ function createChatGPT2APIDashboard(React, STYLES) {
       else if(tab==='settings')void loadProxy();
       else if(tab==='api')void loadUserKeys({silent:userKeysLoaded});
       else if(tab==='advanced')void refreshPools({silent:poolsLoaded});
-      else if(tab==='image'){void loadImagesFolder();void loadImagePreferences();void loadImageModels();}
+      else if(tab==='image'){void loadImagesFolder();void loadImagePreferences();void loadImageModels();void loadGifCapability();}
     },[tab]);
     function copyWithFeedback(text, id){
       copyToClipboard(text, ()=>{
@@ -602,12 +606,23 @@ function createChatGPT2APIDashboard(React, STYLES) {
         setImagePrefs(x=>({...x,defaultModel:r.defaultModel,defaultImageTier:r.defaultImageTier,saving:false,loaded:true,message:'默认模型和分辨率已保存'}));
       }catch(e){setImagePrefs(x=>({...x,saving:false,error:shortError(e)}))}
     }
+    async function loadGifCapability(){
+      try{
+        const result=await upstream('/local/gif-capabilities',{timeoutMs:10000});
+        setGifCapability({enabled:result.enabled===true,loaded:true});
+      }catch{setGifCapability({enabled:false,loaded:true})}
+    }
     async function generate(){
       const pr=prompt.trim();if(!pr){setImageResult({loading:false,url:'',error:'请输入提示词'});return}
+      if(animatedGif&&imageFiles.length){setImageResult({loading:false,url:'',error:'原生 GIF 暂仅支持文生图，请移除参考图片'});return}
+      if(animatedGif&&gifCapability.loaded&&!gifCapability.enabled){setImageResult({loading:false,url:'',error:'要使用原生 GIF，需在 DSH Host 配置 DSH_OPENAI_GIF_API_KEY 并重启插件'});return}
+      if(animatedGif&&(!Number.isInteger(Number(gifFrameCount))||Number(gifFrameCount)<2||Number(gifFrameCount)>16)){setImageResult({loading:false,url:'',error:'GIF 帧数须为 2–16'});return}
+      if(animatedGif&&(!Number.isInteger(Number(gifFrameDuration))||Number(gifFrameDuration)<20||Number(gifFrameDuration)>2000||Number(gifFrameDuration)%10)){setImageResult({loading:false,url:'',error:'每帧时长须为 20–2000 毫秒且为 10 毫秒整数倍'});return}
       if(imageFiles.length>4){setImageResult({loading:false,url:'',error:'最多选择 4 张参考图'});return}
       if(imageFiles.some(x=>x.size>MAX_FILE_SIZE)){setImageResult({loading:false,url:'',error:'每张参考图不得超过 12 MB'});return}
       setImageResult({loading:true,url:'',error:''});
-      const ctrl=new AbortController(),timer=setTimeout(()=>ctrl.abort(),240000);
+      const requestTimeout=animatedGif?720000:240000;
+      const ctrl=new AbortController(),timer=setTimeout(()=>ctrl.abort(),requestTimeout);
       try{
         const images=await Promise.all(imageFiles.map(file=>new Promise((resolve,reject)=>{
           const reader=new FileReader();reader.onerror=()=>reject(Error('图片读取失败'));
@@ -619,10 +634,11 @@ function createChatGPT2APIDashboard(React, STYLES) {
           reader.readAsDataURL(file);
         })));
         const path=images.length?'/v1/images/edits':'/v1/images/generations';
-        const result=await upstream(path,{method:'POST',body:{model:imageModel,prompt:pr,n:1,response_format:'b64_json',resolution:imageTier,...(images.length?{images}:{})},timeoutMs:240000});
-        const first=result?.data?.[0];const output=first?.b64_json?'data:image/png;base64,'+first.b64_json:first?.url||'';
+        const result=await upstream(path,{method:'POST',body:{model:imageModel,prompt:pr,n:1,response_format:'b64_json',resolution:imageTier,...(animatedGif?{output_format:'gif',frame_count:Number(gifFrameCount),frame_duration_ms:Number(gifFrameDuration)}:{}),...(images.length?{images}:{})},timeoutMs:requestTimeout});
+        const first=result?.data?.[0];const format=animatedGif?'gif':'png';
+        const output=first?.b64_json?'data:image/'+format+';base64,'+first.b64_json:first?.url||'';
         if(!output)throw Error('生成服务未返回图片');
-        setImageResult({loading:false,url:output,error:''});reload();
+        setImageResult({loading:false,url:output,error:'',format});reload();
       }catch(e){setImageResult({loading:false,url:'',error:ctrl.signal.aborted?'生成等待超时':imageFailureText(shortError(e))})}
       finally{clearTimeout(timer)}
     }
@@ -946,11 +962,24 @@ function createChatGPT2APIDashboard(React, STYLES) {
               h('p',{className:'c2a-help'},'不保存图片比例。提示词中明确写出 16:9、9:16、1:1 等比例后，插件会结合当前档位生成目标尺寸；未指定比例时使用后端自动尺寸。上游模型可能不支持某些高分辨率组合。'),
               imagePrefs.error?h('p',{className:'c2a-alert'},imagePrefs.error):null,
               imagePrefs.message?h('p',{className:'c2a-info'},imagePrefs.message):null,
+              h('label',{className:'c2a-fieldlabel'},'动图 GIF'),
+              h('div',{className:'c2a-formrow'},
+                h('label',null,h('input',{type:'checkbox',checked:animatedGif,'aria-label':'动图 GIF',onChange:e=>setAnimatedGif(e.target.checked)}),'生成 GIF 动画（原生接口）')
+              ),
+              animatedGif?h(React.Fragment,null,
+                h('p',{className:'c2a-help'},gifCapability.enabled?'GIF 将通过单独配置的 OpenAI 官方 API 生成，普通图片仍走本地号池。':'当前 GIF 通道未配置：在 DSH Host 环境中设置 DSH_OPENAI_GIF_API_KEY 后重启。普通静态生图无需此密钥。'),
+                h('div',{className:'c2a-formrow'},
+                  h('label',{className:'c2a-fieldlabel'},'帧数（2–16）'),
+                  h('input',{type:'number',min:2,max:16,step:1,value:gifFrameCount,'aria-label':'GIF 帧数',onChange:e=>setGifFrameCount(e.target.value)}),
+                  h('label',{className:'c2a-fieldlabel'},'每帧时长（毫秒）'),
+                  h('input',{type:'number',min:20,max:2000,step:10,value:gifFrameDuration,'aria-label':'GIF 每帧时长',onChange:e=>setGifFrameDuration(e.target.value)})
+                )
+              ):null,
               h('label',{className:'c2a-fieldlabel'},'参考图片（最多 4 张，可不选）'),
               h('input',{type:'file',accept:'image/png,image/jpeg,image/webp',multiple:true,'aria-label':'参考图片',onChange:e=>setImageFiles(Array.from(e.target.files||[]).slice(0,5))}),
               h('p',{className:'c2a-help'},imageFiles.length?'已选择 '+imageFiles.length+' 张参考图；每张最大 12MB。':'不选择图片则走文生图；选择参考图则走图片编辑接口。'),
               h('div',{className:'c2a-formrow'},
-                h(Btn,{primary:true,onClick:generate,disabled:imageResult.loading},imageResult.loading?'正在生图，请勿关闭页面…':'生成一张图片'),
+                h(Btn,{primary:true,onClick:generate,disabled:imageResult.loading},imageResult.loading?(animatedGif?'正在生成 GIF…':'正在生图，请勿关闭页面…'):(animatedGif?'生成 GIF 动画':'生成一张图片')),
                 h(Btn,{onClick:openImagesFolder,disabled:folderBusy,title:'在本机文件管理器中打开后端按日期保存历史图片的目录'},folderBusy?'正在打开…':'打开历史图片文件夹')
               ),
               folderNote?h('p',{className:'c2a-help'},folderNote):null,
@@ -962,7 +991,7 @@ function createChatGPT2APIDashboard(React, STYLES) {
             ),
             h(Card,{title:'生成结果'},
               imageResult.error?h('div',{className:'c2a-alert'},imageResult.error):null,
-              imageResult.url?h('div',{className:'c2a-result'},h('img',{src:imageResult.url,alt:'生成结果'}),h('a',{className:'c2a-download',href:imageResult.url,download:'dsh-chatgpt2api-image.png'},'下载图片')):h('div',{className:'c2a-result-empty'},imageResult.loading?'正在等待后端生成结果…':'生成完成后图片显示在这里')
+              imageResult.url?h('div',{className:'c2a-result'},h('img',{src:imageResult.url,alt:'生成结果'}),h('a',{className:'c2a-download',href:imageResult.url,download:'dsh-chatgpt2api-image.'+(imageResult.format==='gif'?'gif':'png')},'下载图片')):h('div',{className:'c2a-result-empty'},imageResult.loading?'正在等待后端生成结果…':'生成完成后图片显示在这里')
             )
           )
         ):
