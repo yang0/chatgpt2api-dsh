@@ -64,12 +64,17 @@ test('GIF bridge forwards native GIF options, not synthesized image frames',asyn
   const h=createAdminHandler({baseUrl:'http://127.0.0.1:38650',secret:'test-secret-very-long',fetcher});
   const result=await h.execute({
     path:'/v1/images/generations',method:'POST',
-    body:{prompt:'16:9 cat waving',model:'gpt-image-2',output_format:'gif',frame_count:9,frame_duration_ms:200}
+    body:{prompt:'16:9 cat waving',model:'gpt-image-2.6',output_format:'gif',frame_count:9,frame_duration_ms:200}
   });
   assert.equal(sent.length,1);
   assert.equal(sent[0].output_format,'gif');
   assert.equal(sent[0].frame_count,9);
   assert.equal(result.generation_mode,'chatgpt_account_pool');
+  assert.equal(sent[0].size,'auto', 'GIF requests without explicit size must not inherit static 4K defaults');
+  await assert.rejects(h.execute({
+    path:'/v1/images/generations',method:'POST',
+    body:{prompt:'GIF',model:'gpt-image-2',output_format:'gif'}
+  }),/GPT Image 2.6/);
   await assert.rejects(h.execute({
     path:'/v1/images/edits',method:'POST',
     body:{prompt:'edit image',output_format:'gif',images:[]}
