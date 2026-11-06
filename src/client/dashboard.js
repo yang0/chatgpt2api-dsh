@@ -175,6 +175,10 @@ function createChatGPT2APIDashboard(React, STYLES) {
     const [doing,setDoing]=usePanelState('doing',false);
     const [proxyState,setProxyState]=usePanelState('proxyState',{url:'',draft:'',configured:false,hasCredentials:false,busy:false,error:'',message:'',test:null});
     const [prompt,setPrompt]=usePanelState('prompt',DEFAULT_PROMPT);
+    const [imageModels,setImageModels]=usePanelState('imageModels',{items:[],loading:false,error:''});
+    const [imagePrefs,setImagePrefs]=usePanelState('imagePrefs',{defaultModel:'gpt-image-2',defaultImageTier:'auto',loaded:false,saving:false,error:'',message:''});
+    const [imageModel,setImageModel]=usePanelState('imageModel','gpt-image-2');
+    const [imageTier,setImageTier]=usePanelState('imageTier','auto');
     const [imageFiles,setImageFiles]=usePanelState('imageFiles',[]);
     const [imageResult,setImageResult]=usePanelState('imageResult',{loading:false,url:'',error:''});
     const [folderBusy,setFolderBusy]=usePanelState('folderBusy',false);
@@ -280,7 +284,7 @@ function createChatGPT2APIDashboard(React, STYLES) {
       else if(tab==='settings')void loadProxy();
       else if(tab==='api')void loadUserKeys({silent:userKeysLoaded});
       else if(tab==='advanced')void refreshPools({silent:poolsLoaded});
-      else if(tab==='image')void loadImagesFolder();
+      else if(tab==='image'){void loadImagesFolder();void loadImagePreferences();void loadImageModels();}
     },[tab]);
     function copyWithFeedback(text, id){
       copyToClipboard(text, ()=>{
@@ -570,6 +574,34 @@ function createChatGPT2APIDashboard(React, STYLES) {
         setPool(x=>({...x,message:progress?(progress.errorCount?'额度刷新完成，但上游查询失败；请检查代理和网络。':'额度刷新完成，请核对当前额度。'):'刷新任务仍在后台执行，请稍后刷新账号列表。'}));
       }catch(e){setPool(x=>({...x,error:shortError(e)}))}finally{setDoing(false)}
     }
+    async function loadImageModels(){
+      setImageModels(x=>({...x,loading:true,error:''}));
+      try{
+        const r=await upstream('/local/models',{timeoutMs:25000});
+        const items=Array.isArray(r.models)?r.models:[];
+        setImageModels({items,loading:false,error:items.length?'':'上游没有返回可用模型'});
+      }catch(e){setImageModels(x=>({...x,loading:false,error:shortError(e)}))}
+    }
+    async function loadImagePreferences(){
+      try{
+        const r=await upstream('/local/image-preferences',{timeoutMs:10000});
+        const defaultModel=String(r.defaultModel||'gpt-image-2');
+        const defaultImageTier=String(r.defaultImageTier||'auto');
+        setImagePrefs(x=>({...x,defaultModel,defaultImageTier,loaded:true,error:''}));
+        // Only initialize the drafts from defaults once per page lifetime.
+        if(!panelStore.get('imagePrefsInitialized')){
+          setImageModel(defaultModel);setImageTier(defaultImageTier);
+          panelStore.set('imagePrefsInitialized',true);
+        }
+      }catch(e){setImagePrefs(x=>({...x,error:'读取图片偏好失败：'+shortError(e)}))}
+    }
+    async function saveImagePreferences(){
+      setImagePrefs(x=>({...x,saving:true,error:'',message:''}));
+      try{
+        const r=await upstream('/local/image-preferences',{method:'POST',body:{defaultModel:imageModel,defaultImageTier:imageTier},timeoutMs:10000});
+        setImagePrefs(x=>({...x,defaultModel:r.defaultModel,defaultImageTier:r.defaultImageTier,saving:false,loaded:true,message:'默认模型和分辨率已保存'}));
+      }catch(e){setImagePrefs(x=>({...x,saving:false,error:shortError(e)}))}
+    }
     async function generate(){
       const pr=prompt.trim();if(!pr){setImageResult({loading:false,url:'',error:'请输入提示词'});return}
       if(imageFiles.length>4){setImageResult({loading:false,url:'',error:'最多选择 4 张参考图'});return}
@@ -587,7 +619,7 @@ function createChatGPT2APIDashboard(React, STYLES) {
           reader.readAsDataURL(file);
         })));
         const path=images.length?'/v1/images/edits':'/v1/images/generations';
-        const result=await upstream(path,{method:'POST',body:{model:'gpt-image-2',prompt:pr,n:1,response_format:'b64_json',...(images.length?{images}:{})},timeoutMs:240000});
+        const result=await upstream(path,{method:'POST',body:{model:imageModel,prompt:pr,n:1,response_format:'b64_json',resolution:imageTier,...(images.length?{images}:{})},timeoutMs:240000});
         const first=result?.data?.[0];const output=first?.b64_json?'data:image/png;base64,'+first.b64_json:first?.url||'';
         if(!output)throw Error('生成服务未返回图片');
         setImageResult({loading:false,url:output,error:''});reload();
@@ -898,6 +930,22 @@ function createChatGPT2APIDashboard(React, STYLES) {
               h('label',{className:'c2a-fieldlabel'},'提示词'),
               h('textarea',{className:'c2a-textarea',value:prompt,onChange:e=>setPrompt(e.target.value),rows:5,'aria-label':'提示词'}),
               h('p',{className:'c2a-help'},'提示：真实人物写真、性感或身体特写类描述容易被上游安全策略拒绝并返回 400；插画、水彩、景物或虚构角色更稳定。'),
+              h('label',{className:'c2a-fieldlabel'},'生成模型'),
+              h('div',{className:'c2a-formrow'},
+                h('select',{className:'c2a-input',value:imageModel,'aria-label':'生成模型',onChange:e=>setImageModel(e.target.value)},
+                  ...[...new Set([imageModel,...imageModels.items])].filter(Boolean).map(x=>h('option',{key:x,value:x},x))),
+                h(Btn,{onClick:loadImageModels,disabled:imageModels.loading},imageModels.loading?'刷新中…':'刷新模型')
+              ),
+              imageModels.error?h('p',{className:'c2a-help'},'模型列表：'+imageModels.error):null,
+              h('label',{className:'c2a-fieldlabel'},'分辨率档位'),
+              h('div',{className:'c2a-formrow'},
+                h('select',{className:'c2a-input',value:imageTier,'aria-label':'分辨率档位',onChange:e=>setImageTier(e.target.value)},
+                  ...[['auto','自动'],['1k','1K'],['2k','2K'],['4k','4K']].map(([value,label])=>h('option',{key:value,value},label))),
+                h(Btn,{onClick:saveImagePreferences,disabled:imagePrefs.saving},imagePrefs.saving?'保存中…':'保存为默认')
+              ),
+              h('p',{className:'c2a-help'},'不保存图片比例。提示词中明确写出 16:9、9:16、1:1 等比例后，插件会结合当前档位生成目标尺寸；未指定比例时使用后端自动尺寸。上游模型可能不支持某些高分辨率组合。'),
+              imagePrefs.error?h('p',{className:'c2a-alert'},imagePrefs.error):null,
+              imagePrefs.message?h('p',{className:'c2a-info'},imagePrefs.message):null,
               h('label',{className:'c2a-fieldlabel'},'参考图片（最多 4 张，可不选）'),
               h('input',{type:'file',accept:'image/png,image/jpeg,image/webp',multiple:true,'aria-label':'参考图片',onChange:e=>setImageFiles(Array.from(e.target.files||[]).slice(0,5))}),
               h('p',{className:'c2a-help'},imageFiles.length?'已选择 '+imageFiles.length+' 张参考图；每张最大 12MB。':'不选择图片则走文生图；选择参考图则走图片编辑接口。'),
