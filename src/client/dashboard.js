@@ -964,7 +964,7 @@ function createChatGPT2APIDashboard(React, STYLES) {
               imagePrefs.message?h('p',{className:'c2a-info'},imagePrefs.message):null,
               h('label',{className:'c2a-fieldlabel'},'动图 GIF'),
               h('div',{className:'c2a-formrow'},
-                h('label',null,h('input',{type:'checkbox',checked:animatedGif,'aria-label':'动图 GIF',onChange:e=>setAnimatedGif(e.target.checked)}),'生成 GIF 动画（号池）')
+                h('label',null,h('input',{type:'checkbox',checked:animatedGif,'aria-label':'动图 GIF',onChange:e=>{const checked=e.target.checked;setAnimatedGif(checked);if(checked&&!['gpt-image-2.6','gpt-image-2.6-flare','gpt-image-2.6-sunburst'].includes(imageModel))setImageModel('gpt-image-2.6')}}),'生成 GIF 动画（号池）')
               ),
               animatedGif?h(React.Fragment,null,
                 h('p',{className:'c2a-help'},gifCapability.enabled?'GIF 由现有 ChatGPT 号池账号通过生图会话生成；是否成功取决于上游账号、模型是否开放 GIF 能力。':'号池 GIF 通道尚未就绪，请重启 DSH 并确认本地后端运行正常；不需要官方 API Key。'),
