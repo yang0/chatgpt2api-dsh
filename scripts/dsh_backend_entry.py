@@ -247,7 +247,7 @@ def generate_pool_gif(fields: dict[str, Any]) -> dict[str, Any]:
     ]
     upstream = dict(fields)
     upstream.update({
-        "model": model, "prompt": options["prompt"] + "\\n\\n" + "\\n".join(hints),
+        "model": model, "prompt": options["prompt"] + "\n\n" + "\n".join(hints),
         "n": 1, "size": None if options["size"] == "auto" else options["size"],
         "response_format": "b64_json", "stream": False
     })
