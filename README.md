@@ -43,19 +43,19 @@
 
 成功后图片会自动按日期保存到本机，页面里可以一键打开历史图片文件夹。如果提示词被上游安全策略拒绝（例如「写真」「身体特写」类描述），换一种更安全的说法即可，界面会给出改写建议。
 
-## 原生 GIF 动画生成
+## ChatGPT 号池 GIF 动画（实验性兼容补丁）
 
-「图片生成」页面增加 **动图 GIF** 开关、帧数（2–16）与每帧时长（20–2000 毫秒，按 10ms 递增）。生成成功后可以直接预览并下载 `.gif`。
+本项目使用原来的 ChatGPT 账号池，不调用 OpenAI 官方付费 API，也不需要 `DSH_OPENAI_GIF_API_KEY`。
 
-**重要：** 当前 `basketikun/chatgpt2api` 的最新固定源码版本（`92dd80e`）尚未实现 GIF API。DSH 插件为原生 GIF 单独接入了官方 OpenAI Images API，而不是将静态帧合成为动画。启用这一通道需要单独的 **OpenAI API Key**，可能产生 API 费用；原来的 ChatGPT 账号池凭据不能替代官方 API Key。不要把 API Key 粘贴到提示词或公开仓库。
+**实现来源：** 参考 `yukkcat/chatgpt2api` 2026-11-06 的 3.2.4 GIF 处理方式，在 DSH 固定的 `basketikun/chatgpt2api` 后端版本上增量回移模型目录、图片请求格式与参数提示，以及 GIF 原始字节存储。没有替换整套 3.x 数据库与号池实现。
 
-在启动 DSH 的 **Host 进程环境**中设置 `DSH_OPENAI_GIF_API_KEY`，随后完整重启 DSH 和它托管的 Python 后端。插件不会把该 Key 传回浏览器或第三方客户端；没有设置时 GIF 请求会明确报错，静态 PNG/JPEG 号池生图仍可使用。仅托管后端支持此功能；外部独立后端不受插件控制。
+图片生成页面可启用 **动图 GIF**，设置帧数（2–16）和每帧时长（20–2000 毫秒，按 10 毫秒递增）。目前仅 `gpt-image-2.6`、`gpt-image-2.6-flare`、`gpt-image-2.6-sunburst` 可以尝试 GIF，且不支持参考图和流式 GIF。
 
-第三方软件可向 `POST http://127.0.0.1:38650/v1/images/generations` 发送：
+第三方软件调用 `POST http://127.0.0.1:38650/v1/images/generations` 时也可使用：
 
 ```json
 {
-  "model": "gpt-image-2",
+  "model": "gpt-image-2.6",
   "prompt": "一只卡通小猫摇尾巴，镜头固定，动作平滑循环",
   "output_format": "gif",
   "frame_count": 9,
@@ -64,7 +64,9 @@
 }
 ```
 
-返回 `data[0].b64_json` 为 GIF Base64，可解码保存为 `.gif`。该通道只实现 `/v1/images/generations` 原生 GIF；参考图片、图片编辑 GIF、流式结果暂不支持。部分模型可能没有 GIF 预览权限或对尺寸、总像素有进一步限制，以上请求不保证所有账号都成功。
+如果上游真正返回 GIF，插件将原始 GIF 保存为 `.gif` 并以 `data[0].b64_json` 返回，**不会合成多张静态图来冒充原生动画**。如果上游仅返回普通静态图，会明确失败。生成成功需要 ChatGPT 账号在上游被开放 GIF 能力，不能保证每个账号可用。
+
+**安装与升级：** 本插件托管后端启动前会对固定的 Python 源码应用严格匹配的 GIF 兼容补丁。完整退出旧后端进程后启动新版 DSH 才会生效；单独刷新网页不足以替换正在运行的 Python 进程。使用外部独立 Python 后端时此补丁不生效。由于号池上游请求及账号能力难以在 CI 中真实重现，仍需在真实账号上进行实际 GIF 验收。
 
 ## 默认生图模型与 1K / 2K / 4K 分辨率
 
