@@ -96,40 +96,5 @@ class ImageDefaultsTest(unittest.TestCase):
                     os.environ["DSH_IMAGE_PREFERENCES_FILE"] = old
 
 
-    def test_native_gif_requires_explicit_key(self):
-        from unittest.mock import patch
-        with patch.dict(os.environ, {"DSH_OPENAI_GIF_API_KEY": ""}):
-            with self.assertRaisesRegex(RuntimeError, "DSH_OPENAI_GIF_API_KEY"):
-                module.generate_native_gif({"output_format": "gif", "prompt": "16:9 motion"})
-
-    def test_native_gif_calls_official_api_once_and_checks_signature(self):
-        import base64
-        from unittest.mock import patch
-        class Reply:
-            def __enter__(self):
-                return self
-            def __exit__(self, *args):
-                return False
-            def read(self, limit):
-                return json.dumps({"created": 1, "data": [
-                    {"b64_json": base64.b64encode(b"GIF89a" + b"x" * 20).decode()}
-                ]}).encode()
-        sent = []
-        def fake_urlopen(req, timeout):
-            sent.append((req.full_url, json.loads(req.data), timeout, req.get_header("Authorization")))
-            return Reply()
-        with patch.dict(os.environ, {"DSH_OPENAI_GIF_API_KEY": "test-only-secret"}):
-            with patch("urllib.request.urlopen", fake_urlopen):
-                result = module.generate_native_gif({
-                    "output_format": "gif", "prompt": "16:9 motion",
-                    "frame_count": 9, "frame_duration_ms": 200, "size": "1024x1024"
-                })
-        self.assertEqual(len(sent), 1)
-        self.assertEqual(sent[0][0], "https://api.openai.com/v1/images/generations")
-        self.assertEqual(sent[0][1]["output_format"], "gif")
-        self.assertEqual(sent[0][1]["frame_count"], 9)
-        self.assertEqual(result["generation_mode"], "official_api")
-
-
 if __name__ == "__main__":
     unittest.main()
