@@ -185,7 +185,7 @@ def validate_gif_request(fields: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("GIF does not support streaming or partial_images")
     size = str(fields.get("size") or "auto").strip().lower()
     if size != "auto":
-        m = re.fullmatch(r"(\\d+)x(\\d+)", size)
+        m = re.fullmatch(r"(\d+)x(\d+)", size)
         if not m:
             raise ValueError("invalid GIF size")
         w, h = int(m[1]), int(m[2])
@@ -212,7 +212,7 @@ def compose_gif(fields: dict[str, Any]) -> dict[str, Any]:
     for index in range(count):
         phase = int(round(index * 100 / count))
         frame_prompt = (
-            options["prompt"] + "\\n"
+            options["prompt"] + "\n"
             + f"这是由 {count} 帧组成的循环动画的第 {index + 1} 帧；运动进度 {phase}%。"
             + "保持角色、场景、镜头、构图与色彩一致；按照运动进度改变姿态或物体位置，"
               "不要生成分镜网格、文字或帧编号。"
@@ -270,6 +270,10 @@ async def handle_gif_api(scope, body: bytes, receive, send):
     try:
         identity = require_identity(authorization)
         fields = json.loads(body)
+        if not isinstance(fields, dict):
+            raise ValueError("GIF request must be a JSON object")
+        # Apply the same saved model/size defaults as the regular image endpoint.
+        fields = json.loads(apply_json_defaults(json.dumps(fields).encode("utf-8"), preferences()))
         options = validate_gif_request(fields)
         await run_in_threadpool(check_request, options["prompt"])
         # Existing upstream logging and account-pool dispatch are reused.
