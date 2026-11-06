@@ -189,8 +189,8 @@ def validate_gif_request(fields: dict[str, Any]) -> dict[str, Any]:
         if not m:
             raise ValueError("invalid GIF size")
         w, h = int(m[1]), int(m[2])
-        if w < 256 or h < 256 or w * h > 2048 * 2048 or max(w, h) > 2048:
-            raise ValueError("composed GIF frames are limited to 2048px maximum side and 4MP")
+        if w < 256 or h < 256 or w % 16 or h % 16 or max(w, h) > 8192 or w * h > 16 * 1024 * 1024:
+            raise ValueError("GIF frame size must be divisible by 16 and within 16 megapixels")
     return {
         "prompt": prompt.strip(), "model": model, "n": 1,
         "size": size, "frame_count": count, "frame_duration_ms": duration
