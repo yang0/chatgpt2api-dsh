@@ -159,6 +159,135 @@ def apply_multipart_defaults(body: bytes, content_type: str, prefs: dict[str, st
     return body[:pos] + bytes(encoded) + body[pos:]
 
 
+
+def validate_gif_request(fields: dict[str, Any]) -> dict[str, Any]:
+    """Limit generated frame count, duration, output dimensions and payload cost."""
+    if not isinstance(fields, dict) or fields.get("output_format") != "gif":
+        raise ValueError("output_format must be gif")
+    prompt = fields.get("prompt")
+    model = str(fields.get("model") or "gpt-image-2")
+    if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 12000:
+        raise ValueError("GIF prompt length must be between 1 and 12000")
+    if not re.fullmatch(r"[a-zA-Z0-9._-]{1,80}", model):
+        raise ValueError("invalid GIF model")
+    if fields.get("n", 1) != 1:
+        raise ValueError("GIF output supports n=1 only")
+    try:
+        count = int(fields.get("frame_count", 9))
+        duration = int(fields.get("frame_duration_ms", 200))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("frame_count/frame_duration_ms must be integers") from exc
+    if count < 2 or count > 16:
+        raise ValueError("frame_count must be between 2 and 16")
+    if duration < 20 or duration > 2000 or duration % 10:
+        raise ValueError("frame_duration_ms must be 20-2000, in 10ms steps")
+    if fields.get("stream") or fields.get("partial_images"):
+        raise ValueError("GIF does not support streaming or partial_images")
+    size = str(fields.get("size") or "auto").strip().lower()
+    if size != "auto":
+        m = re.fullmatch(r"(\\d+)x(\\d+)", size)
+        if not m:
+            raise ValueError("invalid GIF size")
+        w, h = int(m[1]), int(m[2])
+        if w < 256 or h < 256 or w * h > 2048 * 2048 or max(w, h) > 2048:
+            raise ValueError("composed GIF frames are limited to 2048px maximum side and 4MP")
+    return {
+        "prompt": prompt.strip(), "model": model, "n": 1,
+        "size": size, "frame_count": count, "frame_duration_ms": duration
+    }
+
+
+def compose_gif(fields: dict[str, Any]) -> dict[str, Any]:
+    """Compatibility implementation: generate independently prompted frames and join them."""
+    import base64
+    import io
+    import time
+    from PIL import Image, ImageOps
+    from services.protocol.openai_v1_image_generations import handle
+
+    options = validate_gif_request(fields)
+    frames = []
+    target = None
+    count = options["frame_count"]
+    for index in range(count):
+        phase = int(round(index * 100 / count))
+        frame_prompt = (
+            options["prompt"] + "\\n"
+            + f"这是由 {count} 帧组成的循环动画的第 {index + 1} 帧；运动进度 {phase}%。"
+            + "保持角色、场景、镜头、构图与色彩一致；按照运动进度改变姿态或物体位置，"
+              "不要生成分镜网格、文字或帧编号。"
+        )
+        payload = {
+            "prompt": frame_prompt,
+            "model": options["model"],
+            "n": 1,
+            "size": options["size"] if options["size"] != "auto" else None,
+            "response_format": "b64_json"
+        }
+        generated = handle(payload)
+        data = generated.get("data") if isinstance(generated, dict) else None
+        item = data[0] if isinstance(data, list) and data else None
+        encoded = item.get("b64_json") if isinstance(item, dict) else None
+        if not encoded:
+            raise RuntimeError(f"frame {index + 1}/{count} was not generated")
+        raw = base64.b64decode(encoded, validate=True)
+        with Image.open(io.BytesIO(raw)) as src:
+            image = ImageOps.exif_transpose(src).convert("RGB")
+        if target is None:
+            if options["size"] != "auto":
+                target = tuple(map(int, options["size"].split("x")))
+            else:
+                target = image.size
+                if max(target) > 1024 or target[0] * target[1] > 1024 * 1024:
+                    ratio = min(1024 / max(target), (1024 * 1024 / (target[0] * target[1])) ** 0.5)
+                    target = (max(1, int(target[0] * ratio)), max(1, int(target[1] * ratio)))
+        if image.size != target:
+            image = ImageOps.fit(image, target, method=Image.Resampling.LANCZOS)
+        frames.append(image.quantize(colors=128, method=Image.Quantize.MEDIANCUT))
+    output = io.BytesIO()
+    frames[0].save(output, format="GIF", save_all=True, append_images=frames[1:],
+                   duration=options["frame_duration_ms"], loop=0, optimize=True, disposal=2)
+    raw_gif = output.getvalue()
+    if len(raw_gif) > 25 * 1024 * 1024:
+        raise ValueError("GIF exceeds 25MB; lower size or frame_count")
+    return {
+        "created": int(time.time()), "data": [{"b64_json": base64.b64encode(raw_gif).decode("ascii")}],
+        "output_format": "gif", "frame_count": count, "frame_duration_ms": options["frame_duration_ms"],
+        "generation_mode": "composed_frames"
+    }
+
+
+async def handle_gif_api(scope, body: bytes, receive, send):
+    from fastapi import HTTPException
+    from fastapi.concurrency import run_in_threadpool
+    from fastapi.responses import JSONResponse
+    from api.support import require_identity
+    from services.content_filter import check_request
+    from services.log_service import LoggedCall
+
+    headers = dict(scope.get("headers", []))
+    authorization = headers.get(b"authorization", b"").decode("latin1")
+    try:
+        identity = require_identity(authorization)
+        fields = json.loads(body)
+        options = validate_gif_request(fields)
+        await run_in_threadpool(check_request, options["prompt"])
+        # Existing upstream logging and account-pool dispatch are reused.
+        call = LoggedCall(identity, "/v1/images/generations", options["model"],
+                          "GIF逐帧合成", request_text=options["prompt"])
+        result = await call.run(compose_gif, fields)
+        if isinstance(result, dict):
+            response = JSONResponse(result)
+        else:
+            response = result
+    except HTTPException as exc:
+        response = JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+    except (ValueError, TypeError) as exc:
+        response = JSONResponse({"detail": {"error": str(exc)}}, status_code=400)
+    except Exception:
+        response = JSONResponse({"detail": {"error": "GIF generation failed; check backend logs"}}, status_code=502)
+    await response(scope, receive, send)
+
 class ApplyImagePreferences:
     def __init__(self, app):
         self.app = app
@@ -192,6 +321,13 @@ class ApplyImagePreferences:
             if not message.get("more_body", False):
                 break
         original = b"".join(chunks)
+        if scope["path"] == "/v1/images/generations" and is_json:
+            try:
+                image_request = json.loads(original)
+            except (ValueError, UnicodeDecodeError):
+                image_request = None
+            if isinstance(image_request, dict) and image_request.get("output_format") == "gif":
+                return await handle_gif_api(scope, original, receive, send)
         updated = (apply_responses_defaults(original, prefs) if scope["path"] == "/v1/responses"
                    else apply_json_defaults(original, prefs)) if is_json else apply_multipart_defaults(original, content_type, prefs)
         if updated != original:
