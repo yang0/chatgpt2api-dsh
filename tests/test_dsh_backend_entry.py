@@ -68,7 +68,7 @@ class ImageDefaultsTest(unittest.TestCase):
         self.assertEqual(explicit_result.count(b'name="size"'), 1)
         self.assertIn(b"1024x1024", explicit_result)
         self.assertNotIn(b"3840x2160", explicit_result)
-        self.assertIn(b"\\x89PNGbytes", explicit_result)
+        self.assertIn(b"\x89PNGbytes", explicit_result)
 
     def test_asgi_wrapper_changes_external_json(self):
         with tempfile.TemporaryDirectory() as directory:
