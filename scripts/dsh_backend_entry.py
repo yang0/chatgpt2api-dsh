@@ -82,6 +82,41 @@ def apply_json_defaults(body: bytes, prefs: dict[str, str]) -> bytes:
     return json.dumps(fields, ensure_ascii=False, separators=(",", ":")).encode("utf-8") if changed else body
 
 
+def apply_responses_defaults(body: bytes, prefs: dict[str, str]) -> bytes:
+    """Apply image tier to Responses API image_generation tool, never text requests."""
+    try:
+        fields = json.loads(body)
+    except (ValueError, UnicodeDecodeError):
+        return body
+    if not isinstance(fields, dict) or not isinstance(fields.get("tools"), list):
+        return body
+    changed = False
+    tools = []
+    for item in fields["tools"]:
+        if not isinstance(item, dict) or item.get("type") != "image_generation":
+            tools.append(item)
+            continue
+        tool = dict(item)
+        prompt_input = fields.get("input")
+        if isinstance(prompt_input, str):
+            prompt = prompt_input
+        else:
+            # Use the last text-bearing input; leave unrelated fields untouched.
+            prompt = str(prompt_input or "")[:12000]
+        ratio_fields = {"prompt": prompt, "aspect_ratio": fields.get("aspect_ratio"),
+                        "resolution": tool.get("resolution") or fields.get("resolution"),
+                        "size": tool.get("size")}
+        new_size = choose_size(ratio_fields, prefs)
+        if new_size:
+            tool["size"] = new_size
+            changed = True
+        tools.append(tool)
+    if changed:
+        fields["tools"] = tools
+        return json.dumps(fields, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    return body
+
+
 def apply_multipart_defaults(body: bytes, content_type: str, prefs: dict[str, str]) -> bytes:
     match = re.search(r"(?:^|;)\s*boundary=(?:\"([^\"]+)\"|([^;\s]+))", content_type, re.IGNORECASE)
     if not match:
@@ -130,7 +165,7 @@ class ApplyImagePreferences:
 
     async def __call__(self, scope, receive, send):
         if scope.get("type") != "http" or scope.get("method") != "POST" or scope.get("path") not in (
-            "/v1/images/generations", "/v1/images/edits"
+            "/v1/images/generations", "/v1/images/edits", "/v1/responses"
         ):
             return await self.app(scope, receive, send)
         prefs = preferences()
@@ -157,7 +192,8 @@ class ApplyImagePreferences:
             if not message.get("more_body", False):
                 break
         original = b"".join(chunks)
-        updated = apply_json_defaults(original, prefs) if is_json else apply_multipart_defaults(original, content_type, prefs)
+        updated = (apply_responses_defaults(original, prefs) if scope["path"] == "/v1/responses"
+                   else apply_json_defaults(original, prefs)) if is_json else apply_multipart_defaults(original, content_type, prefs)
         if updated != original:
             headers = [(k, v) for k, v in headers if k.lower() != b"content-length"]
             headers.append((b"content-length", str(len(updated)).encode()))
