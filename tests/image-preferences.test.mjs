@@ -50,3 +50,32 @@ test('Host bridge lists models and forwards saved tier as concrete image size',a
   await h.execute({path:'/v1/images/generations',method:'POST',body:{prompt:'一张16:9风景图片',size:'1024x1024'}});
   assert.equal(sent.at(-1).body.size,'1024x1024');
 });
+
+test('GIF bridge forwards native GIF options, not synthesized image frames',async()=>{
+  const sent=[];
+  const fetcher=async(url,options)=>{
+    const data=JSON.parse(options.body);
+    sent.push(data);
+    return {ok:true,status:200,headers:{get:()=>null},text:async()=>JSON.stringify({
+      data:[{b64_json:'R0lGODlhAQABAIAAAAUEBA=='}],
+      output_format:'gif',generation_mode:'official_api',frame_count:9,frame_duration_ms:200
+    })};
+  };
+  const h=createAdminHandler({baseUrl:'http://127.0.0.1:38650',secret:'test-secret-very-long',fetcher});
+  const result=await h.execute({
+    path:'/v1/images/generations',method:'POST',
+    body:{prompt:'16:9 cat waving',model:'gpt-image-2',output_format:'gif',frame_count:9,frame_duration_ms:200}
+  });
+  assert.equal(sent.length,1);
+  assert.equal(sent[0].output_format,'gif');
+  assert.equal(sent[0].frame_count,9);
+  assert.equal(result.generation_mode,'official_api');
+  await assert.rejects(h.execute({
+    path:'/v1/images/edits',method:'POST',
+    body:{prompt:'edit image',output_format:'gif',images:[]}
+  }),/GIF 只支持文生图/);
+  await assert.rejects(h.execute({
+    path:'/v1/images/generations',method:'POST',
+    body:{prompt:'image',output_format:'gif',frame_count:17}
+  }),/2–16/);
+});
