@@ -228,17 +228,29 @@ def generate_native_gif(fields: dict[str, Any]) -> dict[str, Any]:
     )
     try:
         with urllib.request.urlopen(request, timeout=600) as response:
-            content = response.read(70 * 1024 * 1024 + 1)
+            content = response.read(38 * 1024 * 1024 + 1)
     except urllib.error.HTTPError as exc:
         raise RuntimeError("OpenAI GIF API returned HTTP " + str(exc.code)) from None
     except urllib.error.URLError:
         raise RuntimeError("OpenAI GIF API connection failed") from None
-    if len(content) > 70 * 1024 * 1024:
-        raise RuntimeError("OpenAI GIF response exceeds 70MB")
+    if len(content) > 38 * 1024 * 1024:
+        raise RuntimeError("OpenAI GIF response exceeds 38MB")
     result = json.loads(content)
     if not isinstance(result, dict) or not isinstance(result.get("data"), list):
         raise RuntimeError("OpenAI GIF API returned an invalid response")
-    return {**result, "output_format": "gif", "generation_mode": "official_api"}
+    import base64
+    for item in result["data"]:
+        value = item.get("b64_json") if isinstance(item, dict) else None
+        if not isinstance(value, str):
+            raise RuntimeError("OpenAI GIF API did not return base64 image data")
+        try:
+            signature = base64.b64decode(value[:16], validate=False)
+        except Exception:
+            signature = b""
+        if not signature.startswith((b"GIF87a", b"GIF89a")):
+            raise RuntimeError("OpenAI GIF API returned a non-GIF image")
+    return {**result, "output_format": "gif", "generation_mode": "official_api",
+            "frame_count": options["frame_count"], "frame_duration_ms": options["frame_duration_ms"]}
 
 
 async def handle_gif_api(scope, body: bytes, receive, send):
@@ -263,6 +275,9 @@ async def handle_gif_api(scope, body: bytes, receive, send):
         # Existing upstream logging and account-pool dispatch are reused.
         call = LoggedCall(identity, "/v1/images/generations", options["model"],
                           "GIF逐帧合成", request_text=options["prompt"])
+        if not os.environ.get("DSH_OPENAI_GIF_API_KEY", "").strip():
+            response = JSONResponse({"detail": {"error": "原生 GIF 需要在 DSH Host 配置 DSH_OPENAI_GIF_API_KEY；当前号池后端不支持 GIF"}}, status_code=503)
+            return await response(scope, receive, send)
         result = await call.run(generate_native_gif, fields)
         if isinstance(result, dict):
             response = JSONResponse(result)
