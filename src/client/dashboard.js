@@ -667,7 +667,7 @@ function createChatGPT2APIDashboard(React, STYLES) {
     return h('div',{className:'c2a-root'},
       h('header',{className:'c2a-header'},
         h('div',{className:'c2a-brand'},h('span',{className:'c2a-logo'},'◉'),h('div',null,h('strong',null,'ChatGPT2API · 号池'),h('small',null,'跨平台 本地号池 · 通用 OpenAI 兼容接口'))),
-        h('div',{className:'c2a-headright'},h(Chip,{kind:online?(ready?'success':'warning'):'danger'},online?(ready?'号池运行中':'暂无可用账号'):'后端未就绪'),h('span',{className:'c2a-version'},online?'v'+(data.version||'—'):'插件 v0.6.0'),h(Btn,{onClick:reload,disabled:health.loading},health.loading?'检测中…':'刷新'))
+        h('div',{className:'c2a-headright'},h(Chip,{kind:online?(ready?'success':'warning'):'danger'},online?(ready?'号池运行中':'暂无可用账号'):'后端未就绪'),h('span',{className:'c2a-version'},online?'v'+(data.version||'—'):'插件 v0.6.2'),h(Btn,{onClick:reload,disabled:health.loading},health.loading?'检测中…':'刷新'))
       ),
       h('nav',{className:'c2a-tabbar','aria-label':'号池功能'},...PAGES.map(([id,label,icon])=>h('button',{key:id,type:'button',className:'c2a-tab'+(tab===id?' selected':''),onClick:()=>setTab(id)},h('span',{className:'c2a-tabicon'},icon),label))),
       h('main',{className:'c2a-main',ref:mainRef},

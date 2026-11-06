@@ -129,6 +129,8 @@ for(const [platform,arch,libc] of cases){
 test('checksum failures refuse extraction and execution',async t=>{
   const root=temp();t.after(()=>fs.rmSync(root,{force:true,recursive:true}));
   const b=new PlatformBackend({dataDir:root},{platform:'linux',arch:'x64',libc:'gnu',
+    // Nothing is listening in this scenario; never probe a real local port from tests.
+    fetcher:async()=>({ok:false,json:async()=>null}),
     downloader:async(_,file)=>{fs.mkdirSync(path.dirname(file),{recursive:true});fs.writeFileSync(file,'wrong archive')},
     extractTar:()=>{throw Error('should not extract')}});
   await assert.rejects(()=>b.start(),/SHA256/);

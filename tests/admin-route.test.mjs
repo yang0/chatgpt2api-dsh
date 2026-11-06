@@ -311,8 +311,7 @@ test('authenticate route deduplicates identical accounts in input text and corre
   assert.equal(registered.accounts.length, 1);
 });
 
-test('a non-JSON backend reply reports status and a redacted body snippet', async () => {
-  // uvicorn answers an unhandled ASGI exception with plain text. Reporting only
+test('a non-JSON backend reply reports status and a redacted body snippet', async () => {  // uvicorn answers an unhandled ASGI exception with plain text. Reporting only
   // "not valid JSON" hides both the status and the real cause from the user.
   const plainTextFetcher = async () => ({
     status: 500,
@@ -394,4 +393,34 @@ test('proxy URLs with credentials are not returned to the browser',async()=>{
   assert.equal(proxy.hasCredentials,true);
   assert.equal(proxy.url,'');
   assert.doesNotMatch(JSON.stringify(proxy),/password|user:/);
+});
+
+test('GIF requests carry the animation flags and translate an all-still reply into advice', async () => {
+  const sent=[];
+  const gifFetcher=async (url,opts)=>{
+    const route=new URL(url).pathname;
+    if(route!=='/v1/images/generations')throw new Error('unexpected '+route);
+    sent.push(JSON.parse(opts.body));
+    return {status:502,ok:false,headers:{get:()=>null},text:async()=>JSON.stringify({detail:{error:'upstream did not return an animated GIF'}})};
+  };
+  const handler=createAdminHandler({baseUrl:'http://127.0.0.1:38650',secret:SECRET,fetcher:gifFetcher});
+  const res=await handler.route(req({path:'/v1/images/generations',method:'POST',body:{model:'gpt-image-2.6',prompt:'橘猫追蝴蝶循环动画',output_format:'gif',frame_count:8,frame_duration_ms:120}}));
+  assert.equal(res.status,502);
+  const body=await res.json();
+  assert.match(body.error,/静态图/);
+  assert.doesNotMatch(body.error,/upstream did not return/);
+  assert.equal(sent.length,1);
+  assert.deepEqual({f:sent[0].output_format,c:sent[0].frame_count,d:sent[0].frame_duration_ms},{f:'gif',c:8,d:120});
+  assert.equal(sent[0].n,1);assert.equal(sent[0].response_format,'b64_json');
+});
+
+test('GIF parameters are rejected before reaching the backend', async () => {
+  const handler=createAdminHandler({baseUrl:'http://127.0.0.1:38650',secret:SECRET,fetcher:async()=>{throw new Error('must not call upstream')}});
+  const send=async body=>{const res=await handler.route(req({path:'/v1/images/generations',method:'POST',body}));return {status:res.status,body:await res.json()}};
+  let r=await send({model:'gpt-image-2.6',prompt:'x',output_format:'gif',frame_count:1});
+  assert.equal(r.status,400);assert.match(r.body.error,/2–16/);
+  r=await send({model:'gpt-image-2.6',prompt:'x',output_format:'gif',frame_count:8,frame_duration_ms:205});
+  assert.equal(r.status,400);assert.match(r.body.error,/10 毫秒/);
+  r=await send({model:'gpt-image-2',prompt:'x',output_format:'gif',frame_count:8});
+  assert.equal(r.status,400);assert.match(r.body.error,/GPT Image 2\.6/);
 });

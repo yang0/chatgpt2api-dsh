@@ -1,4 +1,4 @@
-# ChatGPT2API Native v0.6.1 安全说明
+# ChatGPT2API Native v0.6.2 安全说明
 
 跨平台版本与 v0.5.0 一样：**用户不必输入任何管理员密码**。DSH 已认证的管理会话访问 Host 的精确路由，由 Host 使用随机内部凭据与 Python 后端通信；网页端与其他插件不会获取管理凭据。第三方 HTTP API 仍需要单独创建的用户 Key。
 
