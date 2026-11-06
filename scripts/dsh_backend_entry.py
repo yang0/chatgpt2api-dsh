@@ -134,8 +134,6 @@ class ApplyImagePreferences:
         ):
             return await self.app(scope, receive, send)
         prefs = preferences()
-        if prefs["defaultImageTier"] == "auto" and prefs["defaultModel"] == "gpt-image-2":
-            return await self.app(scope, receive, send)
         headers = list(scope.get("headers", []))
         content_type = next((v.decode("latin1") for k, v in headers if k.lower() == b"content-type"), "")
         is_json = content_type.split(";", 1)[0].strip().lower() == "application/json"
@@ -171,7 +169,7 @@ class ApplyImagePreferences:
             if not handed:
                 handed = True
                 return {"type": "http.request", "body": updated, "more_body": False}
-            return {"type": "http.disconnect"}
+            return await receive()
 
         await self.app(scope, single_receive, send)
 
