@@ -197,64 +197,48 @@ def validate_gif_request(fields: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def compose_gif(fields: dict[str, Any]) -> dict[str, Any]:
-    """Compatibility implementation: generate independently prompted frames and join them."""
-    import base64
-    import io
-    import time
-    from PIL import Image, ImageOps
-    from services.protocol.openai_v1_image_generations import handle
 
+def generate_native_gif(fields: dict[str, Any]) -> dict[str, Any]:
+    """Forward GIF to the official OpenAI Images API; never synthesize frames.
+
+    The website-backed chatgpt2api account pool does not implement the GIF
+    protocol. The key is explicitly configured on the DSH host, not the caller.
+    """
+    import urllib.error
+    import urllib.request
+
+    key = os.environ.get("DSH_OPENAI_GIF_API_KEY", "").strip()
+    if not key:
+        raise RuntimeError("native GIF requires DSH_OPENAI_GIF_API_KEY; the bundled account-pool backend does not support GIF")
     options = validate_gif_request(fields)
-    frames = []
-    target = None
-    count = options["frame_count"]
-    for index in range(count):
-        phase = int(round(index * 100 / count))
-        frame_prompt = (
-            options["prompt"] + "\n"
-            + f"这是由 {count} 帧组成的循环动画的第 {index + 1} 帧；运动进度 {phase}%。"
-            + "保持角色、场景、镜头、构图与色彩一致；按照运动进度改变姿态或物体位置，"
-              "不要生成分镜网格、文字或帧编号。"
-        )
-        payload = {
-            "prompt": frame_prompt,
-            "model": options["model"],
-            "n": 1,
-            "size": options["size"] if options["size"] != "auto" else None,
-            "response_format": "b64_json"
-        }
-        generated = handle(payload)
-        data = generated.get("data") if isinstance(generated, dict) else None
-        item = data[0] if isinstance(data, list) and data else None
-        encoded = item.get("b64_json") if isinstance(item, dict) else None
-        if not encoded:
-            raise RuntimeError(f"frame {index + 1}/{count} was not generated")
-        raw = base64.b64decode(encoded, validate=True)
-        with Image.open(io.BytesIO(raw)) as src:
-            image = ImageOps.exif_transpose(src).convert("RGB")
-        if target is None:
-            if options["size"] != "auto":
-                target = tuple(map(int, options["size"].split("x")))
-            else:
-                target = image.size
-                if max(target) > 1024 or target[0] * target[1] > 1024 * 1024:
-                    ratio = min(1024 / max(target), (1024 * 1024 / (target[0] * target[1])) ** 0.5)
-                    target = (max(1, int(target[0] * ratio)), max(1, int(target[1] * ratio)))
-        if image.size != target:
-            image = ImageOps.fit(image, target, method=Image.Resampling.LANCZOS)
-        frames.append(image.quantize(colors=128, method=Image.Quantize.MEDIANCUT))
-    output = io.BytesIO()
-    frames[0].save(output, format="GIF", save_all=True, append_images=frames[1:],
-                   duration=options["frame_duration_ms"], loop=0, optimize=True, disposal=2)
-    raw_gif = output.getvalue()
-    if len(raw_gif) > 25 * 1024 * 1024:
-        raise ValueError("GIF exceeds 25MB; lower size or frame_count")
-    return {
-        "created": int(time.time()), "data": [{"b64_json": base64.b64encode(raw_gif).decode("ascii")}],
-        "output_format": "gif", "frame_count": count, "frame_duration_ms": options["frame_duration_ms"],
-        "generation_mode": "composed_frames"
+    payload = {
+        "model": options["model"], "prompt": options["prompt"], "n": 1,
+        "output_format": "gif", "frame_count": options["frame_count"],
+        "frame_duration_ms": options["frame_duration_ms"],
+        "size": options["size"]
     }
+    if fields.get("quality") in ("auto", "low", "medium", "high"):
+        payload["quality"] = fields["quality"]
+    request = urllib.request.Request(
+        "https://api.openai.com/v1/images/generations",
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={"Authorization": "Bearer " + key,
+                 "Content-Type": "application/json", "Accept": "application/json"},
+        method="POST"
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=600) as response:
+            content = response.read(70 * 1024 * 1024 + 1)
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError("OpenAI GIF API returned HTTP " + str(exc.code)) from None
+    except urllib.error.URLError:
+        raise RuntimeError("OpenAI GIF API connection failed") from None
+    if len(content) > 70 * 1024 * 1024:
+        raise RuntimeError("OpenAI GIF response exceeds 70MB")
+    result = json.loads(content)
+    if not isinstance(result, dict) or not isinstance(result.get("data"), list):
+        raise RuntimeError("OpenAI GIF API returned an invalid response")
+    return {**result, "output_format": "gif", "generation_mode": "official_api"}
 
 
 async def handle_gif_api(scope, body: bytes, receive, send):
@@ -279,7 +263,7 @@ async def handle_gif_api(scope, body: bytes, receive, send):
         # Existing upstream logging and account-pool dispatch are reused.
         call = LoggedCall(identity, "/v1/images/generations", options["model"],
                           "GIF逐帧合成", request_text=options["prompt"])
-        result = await call.run(compose_gif, fields)
+        result = await call.run(generate_native_gif, fields)
         if isinstance(result, dict):
             response = JSONResponse(result)
         else:
