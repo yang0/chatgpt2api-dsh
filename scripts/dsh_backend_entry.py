@@ -272,9 +272,9 @@ async def handle_gif_api(scope, body: bytes, receive, send):
         fields = json.loads(apply_json_defaults(json.dumps(fields).encode("utf-8"), preferences()))
         options = validate_gif_request(fields)
         await run_in_threadpool(check_request, options["prompt"])
-        # Existing upstream logging and account-pool dispatch are reused.
+        # Reuse call logging; GIF generation uses the separately configured official API.
         call = LoggedCall(identity, "/v1/images/generations", options["model"],
-                          "GIF逐帧合成", request_text=options["prompt"])
+                          "原生GIF", request_text=options["prompt"])
         if not os.environ.get("DSH_OPENAI_GIF_API_KEY", "").strip():
             response = JSONResponse({"detail": {"error": "原生 GIF 需要在 DSH Host 配置 DSH_OPENAI_GIF_API_KEY；当前号池后端不支持 GIF"}}, status_code=503)
             return await response(scope, receive, send)
