@@ -75,6 +75,12 @@ def apply_json_defaults(body: bytes, prefs: dict[str, str]) -> bytes:
     if not fields.get("model"):
         fields["model"] = prefs["defaultModel"]
         changed = True
+    if fields.get("output_format") == "gif":
+        # Avoid applying a static 2K/4K default to every GIF frame.
+        if not fields.get("size"):
+            fields["size"] = "auto"
+            changed = True
+        return json.dumps(fields, ensure_ascii=False, separators=(",", ":")).encode("utf-8") if changed else body
     size = choose_size(fields, prefs)
     if size:
         fields["size"] = size
