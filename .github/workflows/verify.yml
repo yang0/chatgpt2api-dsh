@@ -1,0 +1,64 @@
+name: Verify DSH plugin and native account-pool GIF backport
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Verify JavaScript and unit tests
+        run: |
+          npm test
+          node --check lib/backend-gif-patch.js
+          node --check lib/client.js
+      - name: Verify Python preference proxy
+        run: python -m unittest discover -s tests -p 'test_dsh_backend_entry.py'
+      - name: Verify pinned source compatibility and GIF Python syntax
+        shell: bash
+        run: |
+          python - <<'PY'
+          import pathlib, urllib.request, zipfile, io
+          revision = '92dd80e91543157d36a4ddad60e765c5293760e9'
+          url = f'https://codeload.github.com/basketikun/chatgpt2api/zip/{revision}'
+          with urllib.request.urlopen(url, timeout=60) as response:
+              archive = zipfile.ZipFile(io.BytesIO(response.read()))
+          target = pathlib.Path('/tmp/dsh-gif-backend')
+          target.mkdir(parents=True, exist_ok=True)
+          archive.extractall(target)
+          print(target / f'chatgpt2api-{revision}')
+          PY
+          node --input-type=module <<'JS'
+          import {installPoolGifBackendPatch} from './lib/backend-gif-patch.js';
+          const root='/tmp/dsh-gif-backend/chatgpt2api-92dd80e91543157d36a4ddad60e765c5293760e9';
+          console.log(installPoolGifBackendPatch(root));
+          // Running twice must remain idempotent.
+          console.log(installPoolGifBackendPatch(root));
+          JS
+          python - <<'PY'
+          from pathlib import Path
+          import py_compile
+          root = Path('/tmp/dsh-gif-backend/chatgpt2api-92dd80e91543157d36a4ddad60e765c5293760e9')
+          for item in (
+              'utils/helper.py',
+              'services/protocol/conversation.py',
+              'services/protocol/openai_v1_image_generations.py',
+              'api/ai.py',
+              'services/image_storage_service.py',
+              'services/image_service.py',
+              'services/openai_backend_api.py',
+              'services/protocol/openai_v1_models.py',
+          ):
+              py_compile.compile(str(root / item), doraise=True)
+              print('compiled:', item)
+          PY
