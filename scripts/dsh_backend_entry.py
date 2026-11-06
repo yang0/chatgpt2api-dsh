@@ -24,8 +24,8 @@ PRESET_SIZES = {
     "3:4": {"1k": "1024x1365", "2k": "1920x2560", "4k": "2880x3840"},
 }
 RATIO_RE = re.compile(
-    r"(?:^|[^\\d])(?:比例|画幅|aspect\\s*ratio)?\\s*"
-    r"(1\\s*:\\s*1|16\\s*:\\s*9|9\\s*:\\s*16|3\\s*:\\s*2|2\\s*:\\s*3|4\\s*:\\s*3|3\\s*:\\s*4)(?!\\d)",
+    r"(?:^|[^\d])(?:比例|画幅|aspect\s*ratio)?\s*"
+    r"(1\s*:\s*1|16\s*:\s*9|9\s*:\s*16|3\s*:\s*2|2\s*:\s*3|4\s*:\s*3|3\s*:\s*4)(?!\d)",
     re.IGNORECASE,
 )
 MAX_BUFFER_BYTES = 72 * 1024 * 1024
@@ -60,7 +60,7 @@ def choose_size(fields: dict[str, Any], prefs: dict[str, str]) -> str | None:
     ratio = str(ratio).strip()
     if not ratio:
         match = RATIO_RE.search(str(fields.get("prompt") or ""))
-        ratio = re.sub(r"\\s", "", match.group(1)) if match else ""
+        ratio = re.sub(r"\s", "", match.group(1)) if match else ""
     return PRESET_SIZES.get(ratio, {}).get(tier)
 
 
@@ -83,7 +83,7 @@ def apply_json_defaults(body: bytes, prefs: dict[str, str]) -> bytes:
 
 
 def apply_multipart_defaults(body: bytes, content_type: str, prefs: dict[str, str]) -> bytes:
-    match = re.search(r"(?:^|;)\\s*boundary=(?:\"([^\"]+)\"|([^;\\s]+))", content_type, re.IGNORECASE)
+    match = re.search(r"(?:^|;)\s*boundary=(?:\"([^\"]+)\"|([^;\s]+))", content_type, re.IGNORECASE)
     if not match:
         return body
     boundary = (match.group(1) or match.group(2)).encode("ascii", "ignore")
@@ -98,17 +98,17 @@ def apply_multipart_defaults(body: bytes, content_type: str, prefs: dict[str, st
     parts = body[:pos].split(marker)
     fields: dict[str, str] = {}
     for part in parts:
-        if not part.startswith(b"\\r\\n"):
+        if not part.startswith(b"\r\n"):
             continue
-        head, sep, value = part[2:].partition(b"\\r\\n\\r\\n")
+        head, sep, value = part[2:].partition(b"\r\n\r\n")
         if not sep or len(head) > 8192:
             continue
-        found = re.search(rb'(?im)^Content-Disposition:\\s*form-data;\\s*name="([a-zA-Z_]+)"', head)
+        found = re.search(rb'(?im)^Content-Disposition:\s*form-data;\s*name="([a-zA-Z_]+)"', head)
         if not found or b"filename=" in head.lower():
             continue
         name = found.group(1).decode("ascii")
         if name in ("prompt", "size", "model", "resolution", "imageTier", "aspect_ratio", "aspectRatio"):
-            fields[name] = value.rstrip(b"\\r\\n").decode("utf-8", "replace")[:12000]
+            fields[name] = value.rstrip(b"\r\n").decode("utf-8", "replace")[:12000]
     additions = {}
     if not fields.get("model"):
         additions["model"] = prefs["defaultModel"]
@@ -119,8 +119,8 @@ def apply_multipart_defaults(body: bytes, content_type: str, prefs: dict[str, st
         return body
     encoded = bytearray()
     for key, value in additions.items():
-        encoded.extend(marker + b'\\r\\nContent-Disposition: form-data; name="' + key.encode() + b'"\\r\\n\\r\\n')
-        encoded.extend(value.encode() + b"\\r\\n")
+        encoded.extend(marker + b'\r\nContent-Disposition: form-data; name="' + key.encode() + b'"\r\n\r\n')
+        encoded.extend(value.encode() + b"\r\n")
     return body[:pos] + bytes(encoded) + body[pos:]
 
 
