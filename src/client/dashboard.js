@@ -182,7 +182,7 @@ function createChatGPT2APIDashboard(React, STYLES) {
     const [animatedGif,setAnimatedGif]=usePanelState('animatedGif',false);
     const [gifFrameCount,setGifFrameCount]=usePanelState('gifFrameCount',9);
     const [gifFrameDuration,setGifFrameDuration]=usePanelState('gifFrameDuration',200);
-    const [gifCapability,setGifCapability]=usePanelState('gifCapability',{enabled:false,loaded:false});
+    const [gifCapability,setGifCapability]=usePanelState('gifCapability',{enabled:false,loaded:false,supportedModels:[]});
     const [imageFiles,setImageFiles]=usePanelState('imageFiles',[]);
     const [imageResult,setImageResult]=usePanelState('imageResult',{loading:false,url:'',error:''});
     const [folderBusy,setFolderBusy]=usePanelState('folderBusy',false);
@@ -609,13 +609,13 @@ function createChatGPT2APIDashboard(React, STYLES) {
     async function loadGifCapability(){
       try{
         const result=await upstream('/local/gif-capabilities',{timeoutMs:10000});
-        setGifCapability({enabled:result.enabled===true,loaded:true});
+        setGifCapability({enabled:result.enabled===true,loaded:true,supportedModels:result.supportedModels||[]});
       }catch{setGifCapability({enabled:false,loaded:true})}
     }
     async function generate(){
       const pr=prompt.trim();if(!pr){setImageResult({loading:false,url:'',error:'请输入提示词'});return}
       if(animatedGif&&imageFiles.length){setImageResult({loading:false,url:'',error:'原生 GIF 暂仅支持文生图，请移除参考图片'});return}
-      if(animatedGif&&gifCapability.loaded&&!gifCapability.enabled){setImageResult({loading:false,url:'',error:'要使用原生 GIF，需在 DSH Host 配置 DSH_OPENAI_GIF_API_KEY 并重启插件'});return}
+      if(animatedGif&&gifCapability.loaded&&!gifCapability.enabled){setImageResult({loading:false,url:'',error:'当前号池 GIF 通道不可用，请重启 DSH 及托管后端'});return}
       if(animatedGif&&(!Number.isInteger(Number(gifFrameCount))||Number(gifFrameCount)<2||Number(gifFrameCount)>16)){setImageResult({loading:false,url:'',error:'GIF 帧数须为 2–16'});return}
       if(animatedGif&&(!Number.isInteger(Number(gifFrameDuration))||Number(gifFrameDuration)<20||Number(gifFrameDuration)>2000||Number(gifFrameDuration)%10)){setImageResult({loading:false,url:'',error:'每帧时长须为 20–2000 毫秒且为 10 毫秒整数倍'});return}
       if(imageFiles.length>4){setImageResult({loading:false,url:'',error:'最多选择 4 张参考图'});return}
@@ -634,7 +634,7 @@ function createChatGPT2APIDashboard(React, STYLES) {
           reader.readAsDataURL(file);
         })));
         const path=images.length?'/v1/images/edits':'/v1/images/generations';
-        const result=await upstream(path,{method:'POST',body:{model:imageModel,prompt:pr,n:1,response_format:'b64_json',resolution:imageTier,...(animatedGif?{output_format:'gif',frame_count:Number(gifFrameCount),frame_duration_ms:Number(gifFrameDuration)}:{}),...(images.length?{images}:{})},timeoutMs:requestTimeout});
+        const result=await upstream(path,{method:'POST',body:{model:imageModel,prompt:pr,n:1,response_format:'b64_json',...(animatedGif?{size:'auto',output_format:'gif',frame_count:Number(gifFrameCount),frame_duration_ms:Number(gifFrameDuration)}:{resolution:imageTier}),...(images.length?{images}:{})},timeoutMs:requestTimeout});
         const first=result?.data?.[0];const format=animatedGif?'gif':'png';
         const output=first?.b64_json?'data:image/'+format+';base64,'+first.b64_json:first?.url||'';
         if(!output)throw Error('生成服务未返回图片');
@@ -964,10 +964,10 @@ function createChatGPT2APIDashboard(React, STYLES) {
               imagePrefs.message?h('p',{className:'c2a-info'},imagePrefs.message):null,
               h('label',{className:'c2a-fieldlabel'},'动图 GIF'),
               h('div',{className:'c2a-formrow'},
-                h('label',null,h('input',{type:'checkbox',checked:animatedGif,'aria-label':'动图 GIF',onChange:e=>setAnimatedGif(e.target.checked)}),'生成 GIF 动画（原生接口）')
+                h('label',null,h('input',{type:'checkbox',checked:animatedGif,'aria-label':'动图 GIF',onChange:e=>setAnimatedGif(e.target.checked)}),'生成 GIF 动画（号池）')
               ),
               animatedGif?h(React.Fragment,null,
-                h('p',{className:'c2a-help'},gifCapability.enabled?'GIF 将通过单独配置的 OpenAI 官方 API 生成，普通图片仍走本地号池。':'当前 GIF 通道未配置：在 DSH Host 环境中设置 DSH_OPENAI_GIF_API_KEY 后重启。普通静态生图无需此密钥。'),
+                h('p',{className:'c2a-help'},gifCapability.enabled?'GIF 由现有 ChatGPT 号池账号通过生图会话生成；是否成功取决于上游账号、模型是否开放 GIF 能力。':'号池 GIF 通道尚未就绪，请重启 DSH 并确认本地后端运行正常；不需要官方 API Key。'),
                 h('div',{className:'c2a-formrow'},
                   h('label',{className:'c2a-fieldlabel'},'帧数（2–16）'),
                   h('input',{type:'number',min:2,max:16,step:1,value:gifFrameCount,'aria-label':'GIF 帧数',onChange:e=>setGifFrameCount(e.target.value)}),
