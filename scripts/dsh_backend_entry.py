@@ -198,58 +198,78 @@ def validate_gif_request(fields: dict[str, Any]) -> dict[str, Any]:
 
 
 
-def generate_native_gif(fields: dict[str, Any]) -> dict[str, Any]:
-    """Forward GIF to the official OpenAI Images API; never synthesize frames.
 
-    The website-backed chatgpt2api account pool does not implement the GIF
-    protocol. The key is explicitly configured on the DSH host, not the caller.
-    """
-    import urllib.error
-    import urllib.request
+def _enable_gif_storage() -> None:
+    """Teach the pinned upstream image store GIF extension + media type."""
+    from services import image_storage_service as storage
+    from services import image_service
+    from fastapi.responses import Response
+    if getattr(storage, "_dsh_gif_patched", False):
+        return
+    storage.IMAGE_EXTENSIONS.add(".gif")
+    original_path = storage.ImageStorageService.make_relative_path
+    def gif_path(self, data):
+        path = original_path(self, data)
+        return path[:-4] + ".gif" if data.startswith((b"GIF87a", b"GIF89a")) else path
+    storage.ImageStorageService.make_relative_path = gif_path
+    original_image_response = image_service.get_image_response
+    def gif_image_response(rel):
+        if rel.lower().endswith(".gif") and not storage.image_storage_service.has_local(rel):
+            return Response(storage.image_storage_service.get_bytes(rel), media_type="image/gif",
+                            headers={"Access-Control-Allow-Origin": "*"})
+        return original_image_response(rel)
+    image_service.get_image_response = gif_image_response
+    # The system router imports the response function by value; update its binding too.
+    from api import system
+    system.get_image_response = gif_image_response
+    storage._dsh_gif_patched = True
 
-    key = os.environ.get("DSH_OPENAI_GIF_API_KEY", "").strip()
-    if not key:
-        raise RuntimeError("native GIF requires DSH_OPENAI_GIF_API_KEY; the bundled account-pool backend does not support GIF")
-    options = validate_gif_request(fields)
-    payload = {
-        "model": options["model"], "prompt": options["prompt"], "n": 1,
-        "output_format": "gif", "frame_count": options["frame_count"],
-        "frame_duration_ms": options["frame_duration_ms"],
-        "size": options["size"]
-    }
-    if fields.get("quality") in ("auto", "low", "medium", "high"):
-        payload["quality"] = fields["quality"]
-    request = urllib.request.Request(
-        "https://api.openai.com/v1/images/generations",
-        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-        headers={"Authorization": "Bearer " + key,
-                 "Content-Type": "application/json", "Accept": "application/json"},
-        method="POST"
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=600) as response:
-            content = response.read(38 * 1024 * 1024 + 1)
-    except urllib.error.HTTPError as exc:
-        raise RuntimeError("OpenAI GIF API returned HTTP " + str(exc.code)) from None
-    except urllib.error.URLError:
-        raise RuntimeError("OpenAI GIF API connection failed") from None
-    if len(content) > 38 * 1024 * 1024:
-        raise RuntimeError("OpenAI GIF response exceeds 38MB")
-    result = json.loads(content)
-    if not isinstance(result, dict) or not isinstance(result.get("data"), list):
-        raise RuntimeError("OpenAI GIF API returned an invalid response")
+
+def generate_pool_gif(fields: dict[str, Any]) -> dict[str, Any]:
+    """Use the authenticated ChatGPT account pool, following yukkcat's
+    existing conversation prompt-hint approach; do not call any paid API."""
     import base64
-    for item in result["data"]:
-        value = item.get("b64_json") if isinstance(item, dict) else None
-        if not isinstance(value, str):
-            raise RuntimeError("OpenAI GIF API did not return base64 image data")
+    from services.protocol.openai_v1_image_generations import handle
+    from fastapi import HTTPException
+
+    options = validate_gif_request(fields)
+    _enable_gif_storage()
+    # The pinned account pool uses gpt-image-2 as its compatible image route.
+    # The GIF prompt is sent through its existing picture_v2 conversation stream.
+    model = options["model"]
+    if model not in ("gpt-image-2",):
+        raise HTTPException(status_code=400, detail={"error": "当前号池后端仅可尝试 gpt-image-2 GIF 模式"})
+    hints = [
+        "生成格式为 gif。",
+        "frame_count: " + str(options["frame_count"]),
+        "frame_duration_ms: " + str(options["frame_duration_ms"]),
+        "直接生成一张真正的动画 GIF 文件，不要生成分镜网格、静态帧或 GIF 的说明文字。"
+    ]
+    upstream = dict(fields)
+    upstream.update({
+        "model": model, "prompt": options["prompt"] + "\\n\\n" + "\\n".join(hints),
+        "n": 1, "size": None if options["size"] == "auto" else options["size"],
+        "response_format": "b64_json", "stream": False
+    })
+    for key in ("output_format", "frame_count", "frame_duration_ms", "resolution", "imageTier", "aspect_ratio"):
+        upstream.pop(key, None)
+    result = handle(upstream)
+    if not isinstance(result, dict) or not isinstance(result.get("data"), list):
+        raise RuntimeError("号池未返回图片结果")
+    assets = result["data"]
+    if not assets:
+        raise RuntimeError("号池没有返回 GIF 图片")
+    for asset in assets:
+        encoded = asset.get("b64_json") if isinstance(asset, dict) else None
+        if not isinstance(encoded, str):
+            raise RuntimeError("号池 GIF 结果缺少 Base64 数据")
         try:
-            signature = base64.b64decode(value[:16], validate=False)
-        except Exception:
-            signature = b""
-        if not signature.startswith((b"GIF87a", b"GIF89a")):
-            raise RuntimeError("OpenAI GIF API returned a non-GIF image")
-    return {**result, "output_format": "gif", "generation_mode": "official_api",
+            data = base64.b64decode(encoded, validate=True)
+        except Exception as exc:
+            raise RuntimeError("号池返回无效图片数据") from exc
+        if not data.startswith((b"GIF87a", b"GIF89a")):
+            raise RuntimeError("上游账号未返回 GIF，而是静态图片；该账号或模型可能没有动画生图权限")
+    return {**result, "output_format": "gif", "generation_mode": "chatgpt_account_pool",
             "frame_count": options["frame_count"], "frame_duration_ms": options["frame_duration_ms"]}
 
 
@@ -272,13 +292,10 @@ async def handle_gif_api(scope, body: bytes, receive, send):
         fields = json.loads(apply_json_defaults(json.dumps(fields).encode("utf-8"), preferences()))
         options = validate_gif_request(fields)
         await run_in_threadpool(check_request, options["prompt"])
-        # Reuse call logging; GIF generation uses the separately configured official API.
+        # Reuse existing pool quota accounting, account selection, and call logging.
         call = LoggedCall(identity, "/v1/images/generations", options["model"],
-                          "原生GIF", request_text=options["prompt"])
-        if not os.environ.get("DSH_OPENAI_GIF_API_KEY", "").strip():
-            response = JSONResponse({"detail": {"error": "原生 GIF 需要在 DSH Host 配置 DSH_OPENAI_GIF_API_KEY；当前号池后端不支持 GIF"}}, status_code=503)
-            return await response(scope, receive, send)
-        result = await call.run(generate_native_gif, fields)
+                          "号池GIF", request_text=options["prompt"])
+        result = await call.run(generate_pool_gif, fields)
         if isinstance(result, dict):
             response = JSONResponse(result)
         else:
