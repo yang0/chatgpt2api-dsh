@@ -58,7 +58,7 @@ test('GIF bridge forwards native GIF options, not synthesized image frames',asyn
     sent.push(data);
     return {ok:true,status:200,headers:{get:()=>null},text:async()=>JSON.stringify({
       data:[{b64_json:'R0lGODlhAQABAIAAAAUEBA=='}],
-      output_format:'gif',generation_mode:'official_api',frame_count:9,frame_duration_ms:200
+      output_format:'gif',generation_mode:'chatgpt_account_pool',frame_count:9,frame_duration_ms:200
     })};
   };
   const h=createAdminHandler({baseUrl:'http://127.0.0.1:38650',secret:'test-secret-very-long',fetcher});
@@ -69,7 +69,7 @@ test('GIF bridge forwards native GIF options, not synthesized image frames',asyn
   assert.equal(sent.length,1);
   assert.equal(sent[0].output_format,'gif');
   assert.equal(sent[0].frame_count,9);
-  assert.equal(result.generation_mode,'official_api');
+  assert.equal(result.generation_mode,'chatgpt_account_pool');
   await assert.rejects(h.execute({
     path:'/v1/images/edits',method:'POST',
     body:{prompt:'edit image',output_format:'gif',images:[]}
