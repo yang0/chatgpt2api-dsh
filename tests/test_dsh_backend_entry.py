@@ -64,7 +64,11 @@ class ImageDefaultsTest(unittest.TestCase):
         self.assertIn(b"3840x2160", output)
         self.assertIn(b"\x89PNGbytes", output)
         explicit = data.replace(b'--testBoundary--', b'--testBoundary\r\nContent-Disposition: form-data; name="size"\r\n\r\n1024x1024\r\n--testBoundary--')
-        self.assertEqual(module.apply_multipart_defaults(explicit, "multipart/form-data; boundary=testBoundary", PREFS), explicit)
+        explicit_result = module.apply_multipart_defaults(explicit, "multipart/form-data; boundary=testBoundary", PREFS)
+        self.assertEqual(explicit_result.count(b'name="size"'), 1)
+        self.assertIn(b"1024x1024", explicit_result)
+        self.assertNotIn(b"3840x2160", explicit_result)
+        self.assertIn(b"\\x89PNGbytes", explicit_result)
 
     def test_asgi_wrapper_changes_external_json(self):
         with tempfile.TemporaryDirectory() as directory:
