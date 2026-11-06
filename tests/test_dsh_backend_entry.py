@@ -57,13 +57,13 @@ class ImageDefaultsTest(unittest.TestCase):
 
     def test_multipart_preserves_uploaded_image(self):
         boundary = "testBoundary"
-        data = (b'--testBoundary\\r\\nContent-Disposition: form-data; name="prompt"\\r\\n\\r\\n16:9 photo\\r\\n'
-                b'--testBoundary\\r\\nContent-Disposition: form-data; name="image"; filename="pic.png"\\r\\nContent-Type: image/png\\r\\n\\r\\n\\x89PNGbytes\\r\\n'
-                b'--testBoundary--\\r\\n')
+        data = (b'--testBoundary\r\nContent-Disposition: form-data; name="prompt"\r\n\r\n16:9 photo\r\n'
+                b'--testBoundary\r\nContent-Disposition: form-data; name="image"; filename="pic.png"\r\nContent-Type: image/png\r\n\r\n\x89PNGbytes\r\n'
+                b'--testBoundary--\r\n')
         output = module.apply_multipart_defaults(data, "multipart/form-data; boundary=testBoundary", PREFS)
         self.assertIn(b"3840x2160", output)
-        self.assertIn(b"\\x89PNGbytes", output)
-        explicit = data.replace(b'--testBoundary--', b'--testBoundary\\r\\nContent-Disposition: form-data; name="size"\\r\\n\\r\\n1024x1024\\r\\n--testBoundary--')
+        self.assertIn(b"\x89PNGbytes", output)
+        explicit = data.replace(b'--testBoundary--', b'--testBoundary\r\nContent-Disposition: form-data; name="size"\r\n\r\n1024x1024\r\n--testBoundary--')
         self.assertEqual(module.apply_multipart_defaults(explicit, "multipart/form-data; boundary=testBoundary", PREFS), explicit)
 
     def test_asgi_wrapper_changes_external_json(self):
