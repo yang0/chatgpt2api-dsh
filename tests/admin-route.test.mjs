@@ -424,3 +424,26 @@ test('GIF parameters are rejected before reaching the backend', async () => {
   r=await send({model:'gpt-image-2',prompt:'x',output_format:'gif',frame_count:8});
   assert.equal(r.status,400);assert.match(r.body.error,/GPT Image 2\.6/);
 });
+
+test('upstream 502 returns sanitized diagnostic and traceback',async()=>{
+  const fetcher=async()=>({status:502,ok:false,headers:{get:()=>null},text:async()=>JSON.stringify({
+    detail:{error:"ProxyError: connection refused at upstream.example:443; api_key=sk-abcdef123456"},
+    traceback:'Traceback (most recent call last):\n  File "service.py", line 42\nProxyError\nAuthorization: Bearer token123456789'
+  })});
+  const handler=createAdminHandler({baseUrl:'http://127.0.0.1:38650',secret:SECRET,fetcher});
+  const res=await handler.route(req({path:'/local/models'}));
+  assert.equal(res.status,502);
+  const body=await res.json();
+  assert.match(body.error,/ProxyError: connection refused/);
+  assert.match(body.upstreamStack,/Traceback/);
+  assert.doesNotMatch(JSON.stringify(body),/sk-abcdef123456|token123456789/);
+});
+test('upstream 502 without traceback reports reason only',async()=>{
+  const fetcher=async()=>({status:502,ok:false,headers:{get:()=>null},text:async()=>JSON.stringify({detail:'Bad Gateway'})});
+  const handler=createAdminHandler({baseUrl:'http://127.0.0.1:38650',secret:SECRET,fetcher});
+  const res=await handler.route(req({path:'/local/models'}));
+  const body=await res.json();
+  assert.equal(res.status,502);
+  assert.match(body.error,/Bad Gateway/);
+  assert.equal(body.upstreamStack,undefined);
+});
