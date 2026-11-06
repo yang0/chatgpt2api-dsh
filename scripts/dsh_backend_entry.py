@@ -164,6 +164,11 @@ class ApplyImagePreferences:
         self.app = app
 
     async def __call__(self, scope, receive, send):
+        if scope.get("type") == "http" and scope.get("method") == "GET" and scope.get("path") == "/dsh/pool-gif-status":
+            from starlette.responses import JSONResponse
+            response = JSONResponse({"enabled": True, "mode": "chatgpt_account_pool",
+                                     "models": ["gpt-image-2.6", "gpt-image-2.6-flare", "gpt-image-2.6-sunburst"]})
+            return await response(scope, receive, send)
         if scope.get("type") != "http" or scope.get("method") != "POST" or scope.get("path") not in (
             "/v1/images/generations", "/v1/images/edits", "/v1/responses"
         ):
