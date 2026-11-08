@@ -447,3 +447,40 @@ test('upstream 502 without traceback reports reason only',async()=>{
   assert.match(body.error,/Bad Gateway/);
   assert.equal(body.upstreamStack,undefined);
 });
+
+test('image HTTP 400 content policy code reaches dashboard without account identity',async()=>{
+  const fetcher=async()=>({status:400,ok:false,headers:{get:()=>null},text:async()=>JSON.stringify({
+    error:{message:'The image generation request failed. Please try again later.',type:'invalid_request_error',
+      code:'content_policy_violation',account_email:'private@example.com',request_token:TOKEN}
+  })});
+  const handler=createAdminHandler({baseUrl:'http://127.0.0.1:38650',secret:SECRET,fetcher});
+  const res=await handler.route(req({path:'/v1/images/generations',method:'POST',body:{prompt:'watercolor cat',model:'gpt-image-2'}}));
+  const body=await res.json();
+  assert.equal(res.status,400);
+  assert.equal(body.upstreamCode,'content_policy_violation');
+  assert.match(body.error,/内容安全策略拒绝生图/);
+  assert.match(body.upstreamMessage,/image generation request failed/);
+  assert.doesNotMatch(JSON.stringify(body),/private@example.com|request_token|upstream_access_token_supersecret/);
+});
+test('event-only image HTTP 400 exposes event and helpful policy explanation',async()=>{
+  const fetcher=async()=>({status:400,ok:false,headers:{get:()=>null},text:async()=>JSON.stringify({
+    detail:{error:{event:'image_stream_content_policy_error',account_email:'private@example.com'}}
+  })});
+  const handler=createAdminHandler({baseUrl:'http://127.0.0.1:38650',secret:SECRET,fetcher});
+  const res=await handler.route(req({path:'/v1/images/generations',method:'POST',body:{prompt:'a cat'}}));
+  const body=await res.json();
+  assert.equal(res.status,400);
+  assert.equal(body.upstreamEvent,'image_stream_content_policy_error');
+  assert.match(body.error,/内容安全策略/);
+  assert.doesNotMatch(JSON.stringify(body),/private@example.com/);
+});
+test('error message email redacted before returning to browser',async()=>{
+  const fetcher=async()=>({status:502,ok:false,headers:{get:()=>null},text:async()=>JSON.stringify({
+    detail:'Failed for private@example.com with secret '+SECRET
+  })});
+  const handler=createAdminHandler({baseUrl:'http://127.0.0.1:38650',secret:SECRET,fetcher});
+  const response=await handler.route(req({path:'/local/models'}));
+  assert.equal(response.status,502);
+  const body=await response.json();
+  assert.doesNotMatch(JSON.stringify(body),/private@example.com|host-private-secret/);
+});

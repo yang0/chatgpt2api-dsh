@@ -119,3 +119,17 @@ test('zero-quota troubleshooting controls and DeepSeek guidance are present in t
   assert.match(source,/我已经导入了所有的账号，但是剩余额度一直是 0/);
   assert.match(source,/pool\.items\.every\(/);
 });
+
+test('image policy failure displays status and code even when upstream message is generic',()=>{
+  const {api}=loadPanel();
+  const err={message:'号池请求失败 HTTP 400',httpStatus:400,
+    upstreamCode:'content_policy_violation',upstreamMessage:'The image generation request failed.'};
+  assert.match(api.__test.imageFailureText(err),/内容安全策略拒绝/);
+  const details=api.__test.imageDiagnostics(err);
+  assert.match(details,/HTTP 状态：400/);
+  assert.match(details,/content_policy_violation/);
+  assert.match(details,/上游事件：未提供/);
+  assert.match(details,/The image generation request failed/);
+  assert.equal(api.__test.imageDiagnostics(null),'');
+  assert.equal(api.__test.imageFailureText({message:'号池请求失败 HTTP 502',httpStatus:502}),'号池请求失败 HTTP 502');
+});

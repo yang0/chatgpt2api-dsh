@@ -20,13 +20,26 @@ function createChatGPT2APIDashboard(React, STYLES) {
   // Upstream refuses portrait / suggestive image prompts with a polite apology
   // in plain text (HTTP 400, code content_policy_violation). Showing that text
   // verbatim reads like a plugin bug, so name the cause and say what to change.
-  const POLICY_ERROR=/违反|防护限制|内容政策|安全策略|敏感|不安全|挑逗|性暗示|violat|moderation|content[_ ]policy|safety/i;
+  const POLICY_ERROR=/违反|防护限制|内容政策|安全策略|敏感|不安全|挑逗|性暗示|violat|moderation|content[_ -]?policy|safety/i;
   function imageFailureText(raw){
-    const text=String(raw||'请求失败').slice(0,300);
-    if(!POLICY_ERROR.test(text))return text;
-    return '上游以内容安全策略拒绝了本次生图，这不是号池或网络故障。\n'+
-      '请避免「写真 / 真人 / 性感 / 身体特写」等描述，改用插画、水彩、景物或虚构角色后重试。\n'+
-      '（上游原文：'+text.slice(0,180)+'）';
+    const obj=raw&&typeof raw==='object'?raw:null;
+    const message=String(obj?.upstreamMessage||obj?.message||raw||'请求失败').slice(0,1600);
+    const code=String(obj?.upstreamCode||''),event=String(obj?.upstreamEvent||'');
+    if(!POLICY_ERROR.test([message,code,event].join(' ')))return message;
+    return '上游内容安全策略拒绝了本次生图（HTTP '+(obj?.httpStatus||400)+'），不是号池或网络故障。\n'+
+      '请调整触发策略的提示词或参考图片，改用插画、水彩、景物或虚构角色后重试。\n'+
+      (obj?.upstreamMessage?'上游原文：'+String(obj.upstreamMessage).slice(0,800):'上游未返回可读的详细原因。');
+  }
+  function imageDiagnostics(error){
+    if(!error||typeof error!=='object')return '';
+    const lines=[
+      'HTTP 状态：'+(error.httpStatus||'未提供'),
+      '上游代码：'+(error.upstreamCode||'未提供'),
+      '上游事件：'+(error.upstreamEvent||'未提供（日志事件不一定包含在 HTTP 响应中）'),
+      '上游消息：'+(error.upstreamMessage||'未提供'),
+    ];
+    if(error.upstreamStack)lines.push('脱敏堆栈：\n'+String(error.upstreamStack).slice(0,4000));
+    return lines.join('\n').slice(0,7000);
   }
   function HeaderIcon(){return h('span',{style:{display:'inline-flex',alignItems:'center',justifyContent:'center',width:'20px',height:'20px',fontSize:'18px'}},'◉')}
   function Chip({kind='neutral',children}){return h('span',{className:'c2a-chip '+kind},children)}
@@ -102,7 +115,15 @@ function createChatGPT2APIDashboard(React, STYLES) {
   }
   function parseJsonResponse(resp,txt){
     let obj;try{obj=JSON.parse(txt)}catch{throw Error(`HTTP ${resp.status}: 返回内容不是 JSON`)}
-    if(!resp.ok){const err=obj?.detail?.error||obj?.detail?.message||obj?.detail||obj?.error?.message||obj?.error||('HTTP '+resp.status);throw Error(typeof err==='string'?err:JSON.stringify(err))}
+    if(!resp.ok){
+      const msg=obj?.detail?.error||obj?.detail?.message||obj?.detail||obj?.error?.message||obj?.error||('HTTP '+resp.status);
+      const error=new Error(typeof msg==='string'?msg:JSON.stringify(msg));
+      error.httpStatus=resp.status;
+      for(const field of ['upstreamCode','upstreamEvent','upstreamMessage','upstreamStack']){
+        if(typeof obj?.[field]==='string')error[field]=obj[field];
+      }
+      throw error;
+    }
     return obj;
   }
   // DSH renders only the active 'main' entry: switching to another plugin
@@ -639,7 +660,7 @@ function createChatGPT2APIDashboard(React, STYLES) {
         const output=first?.b64_json?'data:image/'+format+';base64,'+first.b64_json:first?.url||'';
         if(!output)throw Error('生成服务未返回图片');
         setImageResult({loading:false,url:output,error:'',format});reload();
-      }catch(e){setImageResult({loading:false,url:'',error:ctrl.signal.aborted?'生成等待超时':imageFailureText(shortError(e))})}
+      }catch(e){setImageResult({loading:false,url:'',error:ctrl.signal.aborted?'生成等待超时':imageFailureText(e),errorDetails:ctrl.signal.aborted?'':imageDiagnostics(e)})}
       finally{clearTimeout(timer)}
     }
     async function loadImagesFolder(){
@@ -990,8 +1011,17 @@ function createChatGPT2APIDashboard(React, STYLES) {
               h('p',{className:'c2a-help'},'成功后图片会自动按 年/月/日 保存在本机后端数据目录；如果系统没有弹出文件管理器，直接复制上面的地址粘贴到资源管理器/访达即可。')
             ),
             h(Card,{title:'生成结果'},
-              imageResult.error?h('div',{className:'c2a-alert'},imageResult.error):null,
-              imageResult.url?h('div',{className:'c2a-result'},h('img',{src:imageResult.url,alt:'生成结果'}),h('a',{className:'c2a-download',href:imageResult.url,download:'dsh-chatgpt2api-image.'+(imageResult.format==='gif'?'gif':'png')},'下载图片')):h('div',{className:'c2a-result-empty'},imageResult.loading?'正在等待后端生成结果…':'生成完成后图片显示在这里')
+              imageResult.error?h('div',{className:'c2a-alert'},
+                h('strong',null,'图片生成失败'),
+                h('p',{style:{margin:'6px 0 0',whiteSpace:'pre-wrap',overflowWrap:'anywhere'}},imageResult.error),
+                imageResult.errorDetails?h('details',{style:{marginTop:'12px'}},
+                  h('summary',{style:{cursor:'pointer',fontWeight:600}},'查看上游诊断详情（已脱敏）'),
+                  h('pre',{className:'c2a-code',style:{marginTop:'8px',maxHeight:'280px',overflow:'auto'}},imageResult.errorDetails),
+                  h(Btn,{onClick:()=>copyWithFeedback(imageResult.errorDetails,'image-error-diagnostic')},
+                    copiedId==='image-error-diagnostic'?'✓ 已复制':'复制诊断信息')
+                ):null
+              ):null,
+              imageResult.url?h('div',{className:'c2a-result'},h('img',{src:imageResult.url,alt:'生成结果'}),h('a',{className:'c2a-download',href:imageResult.url,download:'dsh-chatgpt2api-image.'+(imageResult.format==='gif'?'gif':'png')},'下载图片')):h('div',{className:'c2a-result-empty'},imageResult.loading?'正在等待后端生成结果…':imageResult.error?'本次生成失败，请查看上方原因':'生成完成后图片显示在这里')
             )
           )
         ):
@@ -1060,5 +1090,5 @@ function createChatGPT2APIDashboard(React, STYLES) {
       h('footer',{className:'c2a-footer'},h('span',null,'ChatGPT2API Native · 跨平台 x64 · DSH Host + OpenAI 兼容 HTTP API'),h('span',null,'管理免密码 · 第三方 API Key 独立隔离'))
     );
   }
-  return {Dashboard,HeaderIcon,urlClean,PANEL,imageFailureText,DEFAULT_PROMPT};
+  return {Dashboard,HeaderIcon,urlClean,PANEL,imageFailureText,imageDiagnostics,DEFAULT_PROMPT};
 }
