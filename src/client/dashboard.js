@@ -28,7 +28,7 @@ function createChatGPT2APIDashboard(React, STYLES) {
     if(!POLICY_ERROR.test([message,code,event].join(' ')))return message;
     return '上游内容安全策略拒绝了本次生图（HTTP '+(obj?.httpStatus||400)+'），不是号池或网络故障。\n'+
       '请调整触发策略的提示词或参考图片，改用插画、水彩、景物或虚构角色后重试。\n'+
-      (obj?.upstreamMessage?'上游原文：'+String(obj.upstreamMessage).slice(0,800):'上游未返回可读的详细原因。');
+      (obj?.upstreamMessage?'上游原文：'+String(obj.upstreamMessage).slice(0,800):!obj?'上游原文：'+message.slice(0,800):'上游未返回可读的详细原因。');
   }
   function imageDiagnostics(error){
     if(!error||typeof error!=='object')return '';
