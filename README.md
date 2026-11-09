@@ -37,6 +37,17 @@
 
 支持 `models`、`chat/completions`、`responses`、`images/generations`、`images/edits` 这些常用接口，Cherry Studio 等客户端可以直接连。
 
+## Magpie 接入：复用本地 2FA 账号池（可选）
+
+如果你使用 [Magpie](https://github.com/yetone/magpie)，可以安装仓库里的 [Magpie Provider 插件](integrations/magpie/README.md)。在本插件号池管理中按 `邮箱----密码----2FA密钥` 导入账号后，Magpie 可通过本地 API 将号池作为 `dsh-pool` 供应商使用。
+
+```powershell
+magpie plugin add ./integrations/magpie
+magpie plugin login dsh-pool
+```
+
+登录时输入本插件「API 接入」页面创建的**用户 API Key**。这个桥接不会将每个 DSH 账号写入 Magpie 内置的 Codex 账号列表；详见 [功能边界与安装测试](integrations/magpie/README.md)。
+
 ## 第三步：直接生图
 
 打开「图片生成」，输入提示词就能出图；也可以上传最多 4 张参考图做图片编辑。
