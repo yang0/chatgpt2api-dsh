@@ -206,6 +206,8 @@ function createChatGPT2APIDashboard(React, STYLES) {
     const [gifCapability,setGifCapability]=usePanelState('gifCapability',{enabled:false,loaded:false,supportedModels:[]});
     const [imageFiles,setImageFiles]=usePanelState('imageFiles',[]);
     const [imageResult,setImageResult]=usePanelState('imageResult',{loading:false,url:'',error:''});
+    // Ephemeral on purpose: a 32 KB redacted log tail must not land in localStorage.
+    const [errorDiag,setErrorDiag]=React.useState({open:false,loading:false,tail:'',logPath:'',error:''});
     const [folderBusy,setFolderBusy]=usePanelState('folderBusy',false);
     const [folderNote,setFolderNote]=usePanelState('folderNote','');
     const [folderInfo,setFolderInfo]=usePanelState('folderInfo',{dir:'',count:0});
@@ -642,6 +644,7 @@ function createChatGPT2APIDashboard(React, STYLES) {
       if(imageFiles.length>4){setImageResult({loading:false,url:'',error:'最多选择 4 张参考图'});return}
       if(imageFiles.some(x=>x.size>MAX_FILE_SIZE)){setImageResult({loading:false,url:'',error:'每张参考图不得超过 12 MB'});return}
       setImageResult({loading:true,url:'',error:''});
+      setErrorDiag(x=>x.open||x.tail||x.error?{open:false,loading:false,tail:'',logPath:'',error:''}:x);
       const requestTimeout=animatedGif?720000:240000;
       const ctrl=new AbortController(),timer=setTimeout(()=>ctrl.abort(),requestTimeout);
       try{
@@ -662,6 +665,16 @@ function createChatGPT2APIDashboard(React, STYLES) {
         setImageResult({loading:false,url:output,error:'',format});reload();
       }catch(e){setImageResult({loading:false,url:'',error:ctrl.signal.aborted?'生成等待超时':imageFailureText(e),errorDetails:ctrl.signal.aborted?'':imageDiagnostics(e)})}
       finally{clearTimeout(timer)}
+    }
+    // "Upstream 502" is undebuggable without the backend traceback; fetch the
+    // redacted log tail on demand instead of shipping it with every error.
+    async function toggleErrorDiagnostics(){
+      if(errorDiag.open){setErrorDiag(x=>({...x,open:false}));return}
+      setErrorDiag({open:true,loading:true,tail:'',logPath:'',error:''});
+      try{
+        const r=await upstream('/local/diagnostics',{method:'GET',timeoutMs:15000});
+        setErrorDiag({open:true,loading:false,tail:String(r?.tail||''),logPath:String(r?.logPath||''),error:r?.error?String(r.error):''});
+      }catch(e){setErrorDiag({open:true,loading:false,tail:'',logPath:'',error:shortError(e)})}
     }
     async function loadImagesFolder(){
       try{
@@ -688,7 +701,7 @@ function createChatGPT2APIDashboard(React, STYLES) {
     return h('div',{className:'c2a-root'},
       h('header',{className:'c2a-header'},
         h('div',{className:'c2a-brand'},h('span',{className:'c2a-logo'},'◉'),h('div',null,h('strong',null,'ChatGPT2API · 号池'),h('small',null,'跨平台 本地号池 · 通用 OpenAI 兼容接口'))),
-        h('div',{className:'c2a-headright'},h(Chip,{kind:online?(ready?'success':'warning'):'danger'},online?(ready?'号池运行中':'暂无可用账号'):'后端未就绪'),h('span',{className:'c2a-version'},online?'v'+(data.version||'—'):'插件 v0.6.2'),h(Btn,{onClick:reload,disabled:health.loading},health.loading?'检测中…':'刷新'))
+        h('div',{className:'c2a-headright'},h(Chip,{kind:online?(ready?'success':'warning'):'danger'},online?(ready?'号池运行中':'暂无可用账号'):'后端未就绪'),h('span',{className:'c2a-version'},online?'v'+(data.version||'—'):'插件 v0.6.3'),h(Btn,{onClick:reload,disabled:health.loading},health.loading?'检测中…':'刷新'))
       ),
       h('nav',{className:'c2a-tabbar','aria-label':'号池功能'},...PAGES.map(([id,label,icon])=>h('button',{key:id,type:'button',className:'c2a-tab'+(tab===id?' selected':''),onClick:()=>setTab(id)},h('span',{className:'c2a-tabicon'},icon),label))),
       h('main',{className:'c2a-main',ref:mainRef},
@@ -1019,6 +1032,18 @@ function createChatGPT2APIDashboard(React, STYLES) {
                   h('pre',{className:'c2a-code',style:{marginTop:'8px',maxHeight:'280px',overflow:'auto'}},imageResult.errorDetails),
                   h(Btn,{onClick:()=>copyWithFeedback(imageResult.errorDetails,'image-error-diagnostic')},
                     copiedId==='image-error-diagnostic'?'✓ 已复制':'复制诊断信息')
+                ):null,
+                h('div',{className:'c2a-formrow',style:{marginTop:'8px'}},
+                  h(Btn,{onClick:toggleErrorDiagnostics,disabled:errorDiag.loading},errorDiag.loading?'读取日志中…':(errorDiag.open?'收起详细错误':'查看详细错误（后端日志）'))
+                ),
+                errorDiag.open?h('div',null,
+                  errorDiag.error?h('p',{className:'c2a-help'},'读取失败：'+errorDiag.error):null,
+                  errorDiag.tail?h('pre',{className:'c2a-code',style:{maxHeight:'320px',overflow:'auto',whiteSpace:'pre-wrap',wordBreak:'break-word',marginTop:'8px',fontSize:'11px'}},errorDiag.tail):null,
+                  errorDiag.logPath?h('div',{className:'c2a-formrow',style:{marginTop:'8px',alignItems:'stretch'}},
+                    h('code',{className:'c2a-code',style:{flex:1,minWidth:0,margin:0,padding:'8px 10px',fontSize:'11px',whiteSpace:'pre-wrap',wordBreak:'break-all'}},errorDiag.logPath),
+                    h(Btn,{onClick:()=>copyWithFeedback(errorDiag.tail,'diag-tail'),title:'复制脱敏后的日志尾部'},copiedId==='diag-tail'?'✓ 已复制':'复制日志')
+                  ):null,
+                  h('p',{className:'c2a-help'},'日志已自动脱敏（内部密钥、API Key、Token、邮箱地址）。反馈问题时可直接复制上面的内容。')
                 ):null
               ):null,
               imageResult.url?h('div',{className:'c2a-result'},h('img',{src:imageResult.url,alt:'生成结果'}),h('a',{className:'c2a-download',href:imageResult.url,download:'dsh-chatgpt2api-image.'+(imageResult.format==='gif'?'gif':'png')},'下载图片')):h('div',{className:'c2a-result-empty'},imageResult.loading?'正在等待后端生成结果…':imageResult.error?'本次生成失败，请查看上方原因':'生成完成后图片显示在这里')

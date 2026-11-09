@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-chatgpt2api",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "type": "module",
   "private": true,
   "description": "Cross-platform DSH standalone account pool and local OpenAI-compatible image/text API; no Docker",

@@ -484,3 +484,52 @@ test('error message email redacted before returning to browser',async()=>{
   const body=await response.json();
   assert.doesNotMatch(JSON.stringify(body),/private@example.com|host-private-secret/);
 });
+
+test('diagnostics hands over a redacted backend log tail for bug reports', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'c2a-diag-'));
+  t.after(() => fs.rmSync(dir, {force: true, recursive: true}));
+  const log = path.join(dir, 'backend.log');
+  const jwt = 'eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyLTEifQ.c2lnbmF0dXJlLXNlY3JldA';
+  fs.writeFileSync(log, [
+    'Traceback (most recent call last):',
+    '  File "conversation.py", line 1, in format_image_result',
+    'ERROR:    Exception in ASGI application',
+    `token ${jwt} and secret ${SECRET}`,
+    'Authorization: Bearer abcdefghijklmnop',
+    'sk-abcdef123456',
+    `{"access_token":"${TOKEN}","refresh_token":"r3fr3sh"}`,
+    'account owner@example.com failed'
+  ].join('\n'));
+  const handler = createAdminHandler({baseUrl: 'http://127.0.0.1:38650', secret: SECRET, fetcher, logPath: log});
+  const res = await handler.route(req({path: '/local/diagnostics', method: 'GET'}));
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.exists, true);
+  assert.equal(body.logPath, log);
+  assert.match(body.tail, /Traceback \(most recent call last\)/);
+  assert.match(body.tail, /Exception in ASGI application/);
+  assert.doesNotMatch(body.tail, /upstream_access_token_supersecret/);
+  assert.doesNotMatch(body.tail, new RegExp(SECRET));
+  assert.doesNotMatch(body.tail, /sk-abcdef123456/);
+  assert.doesNotMatch(body.tail, /abcdefghijklmnop/);
+  assert.doesNotMatch(body.tail, /c2lnbmF0dXJlLXNlY3JldA/);
+  assert.doesNotMatch(body.tail, /r3fr3sh/);
+  assert.match(body.tail, /o\*\*\*@example\.com/);
+  assert.equal(body.backend.baseUrl, 'http://127.0.0.1:38650');
+});
+
+test('diagnostics reports a missing log instead of failing the request', async () => {
+  const handler = createAdminHandler({baseUrl: 'http://127.0.0.1:38650', secret: SECRET, fetcher,
+    logPath: path.join(os.tmpdir(), 'definitely-missing-c2a-log.txt')});
+  const res = await handler.route(req({path: '/local/diagnostics', method: 'GET'}));
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.exists, false);
+  assert.equal(body.tail, '');
+});
+
+test('diagnostics is read-only', async () => {
+  const handler = createAdminHandler({baseUrl: 'http://127.0.0.1:38650', secret: SECRET, fetcher, logPath: path.join(os.tmpdir(), 'x.log')});
+  const res = await handler.route(req({path: '/local/diagnostics', method: 'POST'}));
+  assert.equal(res.status, 405);
+});
