@@ -1,0 +1,16 @@
+{
+  "name": "opencode-dsh-chatgpt-pool-auth",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./index.mjs",
+  "description": "Magpie provider plugin for the locally running DSH ChatGPT2API account pool",
+  "keywords": ["magpie", "opencode-plugin", "provider", "dsh", "chatgpt2api"],
+  "license": "MIT",
+  "scripts": {
+    "test": "node --test tests/*.test.mjs"
+  },
+  "magpie": {
+    "maxConcurrency": 4
+  }
+}
